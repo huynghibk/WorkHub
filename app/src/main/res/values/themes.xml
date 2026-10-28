@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="pine">#4F46E5</color>
+    <color name="ink_dark">#111827</color>
+    <color name="page_bg">#F9FAFB</color>
+    <color name="indigo">#4F46E5</color>
+    <color name="border_subtle">#E5E7EB</color>
+    <style name="WorkHubCalendarDatePicker" parent="@android:style/Theme.Material.Light.Dialog">
+        <item name="android:datePickerMode">calendar</item>
+    </style>
+    <style name="WorkHubSpinnerDatePicker" parent="@android:style/Theme.Material.Light.Dialog">
+        <item name="android:datePickerMode">spinner</item>
+    </style>
+    <style name="Theme.WorkHub" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/indigo</item>
+        <item name="android:navigationBarColor">@color/page_bg</item>
+        <item name="android:windowBackground">@color/page_bg</item>
+    </style>
+</resources>

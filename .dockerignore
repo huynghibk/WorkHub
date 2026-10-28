@@ -1,0 +1,11 @@
+.git
+.idea
+.gradle
+**/build
+local-m2
+dist
+**/*.apk
+**/.DS_Store
+**/local.properties
+agent-transcripts
+**/*.iml

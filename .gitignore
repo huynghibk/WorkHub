@@ -1,0 +1,23 @@
+.gradle/
+.idea/
+.kotlin/
+build/
+**/build/
+local.properties
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+server/data/
+*.h2.db
+*.trace.db
+.DS_Store
+
+# Secrets & local caches — never push
+*.key
+*.pem
+ssh-key*
+local-m2/
+dist/
+*.apk
+*.aab

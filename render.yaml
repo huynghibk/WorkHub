@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: workhub-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: WORKHUB_DATA_DIR
+        value: /data
+      - key: WORKHUB_JWT_SECRET
+        generateValue: true
