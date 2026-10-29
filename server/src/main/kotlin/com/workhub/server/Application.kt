@@ -91,6 +91,7 @@ private val json = Json { ignoreUnknownKeys = true }
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
+    println("WorkHub bind host=0.0.0.0 port=$port")
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
 }
@@ -142,8 +143,15 @@ fun Application.module() {
         get("/") {
             call.respondText("WorkHub API is running", ContentType.Text.Plain)
         }
+        // Render đôi khi probe HEAD /
+        head("/") {
+            call.respond(HttpStatusCode.OK)
+        }
         get("/health") {
             call.respondText("ok", ContentType.Text.Plain)
+        }
+        head("/health") {
+            call.respond(HttpStatusCode.OK)
         }
         get("/healthz") {
             call.respondText("ok", ContentType.Text.Plain)

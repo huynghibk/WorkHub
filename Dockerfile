@@ -15,9 +15,18 @@ RUN chmod +x gradlew \
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 COPY --from=build /workspace/server/build/install/server /app
-ENV PORT=8080
+# Không set PORT ở đây — Render tự inject (thường 10000).
 ENV WORKHUB_DATA_DIR=/data
 ENV WORKHUB_JWT_SECRET=change-me-in-production
-RUN mkdir -p /data
+ENV JAVA_TOOL_OPTIONS="-Xmx384m -XX:+UseContainerSupport"
+RUN mkdir -p /data \
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'set -e' \
+      'PORT="${PORT:-8080}"' \
+      'echo "WorkHub starting on 0.0.0.0:${PORT}"' \
+      'exec java $JAVA_TOOL_OPTIONS -cp "/app/lib/*" com.workhub.server.ApplicationKt' \
+      > /app/start.sh \
+    && chmod +x /app/start.sh
 EXPOSE 8080
-CMD ["/app/bin/server"]
+CMD ["/app/start.sh"]

@@ -263,6 +263,11 @@ class WorkHubApi(private val session: SessionStore) {
                 if (response.status.value == 405 && path.contains("/me")) {
                     throw ApiException("Máy chủ chưa cập nhật API hồ sơ (405). Hãy restart server backend rồi thử lại.")
                 }
+                if (response.status.value == 404) {
+                    throw ApiException(
+                        "Không tìm thấy API (${path}). Kiểm tra địa chỉ máy chủ và Render còn Live; mở /health trên trình duyệt phải ra ok.",
+                    )
+                }
                 val message = runCatching { response.body<ErrorResponse>().error }.getOrNull()
                 throw ApiException(message ?: "Yêu cầu thất bại (${response.status.value})")
             }
