@@ -3,6 +3,8 @@ services:
     name: workhub-api
     runtime: docker
     plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: PORT

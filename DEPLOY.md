@@ -20,6 +20,9 @@ Khuyến nghị bắt đầu: **Render Free**.
 
 ## Deploy lên Render (khuyến nghị)
 
+> Dockerfile build **chỉ** module `server` + `shared` (không cần Android SDK).
+> Nếu log báo `open data: no such file` → Dockerfile Path phải là `./Dockerfile`, không phải `/data`.
+
 1. Đẩy code lên **GitHub** (repo public hoặc private).
 2. Vào [https://dashboard.render.com](https://dashboard.render.com) → Sign up (GitHub).
 3. **New → Web Service** → chọn repo WorkHub.
