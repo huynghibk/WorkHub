@@ -237,7 +237,12 @@
     <string name="login_subtitle">Where your team gets work done.</string>
     <string name="login_field">Email or username</string>
     <string name="server_url">Server URL</string>
-    <string name="server_url_hint">e.g. http://192.168.1.10:8080</string>
+    <string name="server_url_hint">e.g. https://workhub-o0my.onrender.com</string>
+    <string name="server_settings">Server</string>
+    <string name="server_preset_cloud">Cloud (Render)</string>
+    <string name="server_preset_emulator">Emulator (local)</string>
+    <string name="server_custom">Custom (company server)</string>
+    <string name="server_save">Save server</string>
     <string name="remember_login">Remember me</string>
     <string name="sign_in">Sign in</string>
     <string name="create_account">Create account</string>

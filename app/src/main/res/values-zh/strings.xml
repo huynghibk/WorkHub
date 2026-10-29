@@ -237,7 +237,12 @@
     <string name="login_subtitle">团队一起完成工作的地方。</string>
     <string name="login_field">邮箱或用户名</string>
     <string name="server_url">服务器地址</string>
-    <string name="server_url_hint">例如 http://192.168.1.10:8080</string>
+    <string name="server_url_hint">例如 https://workhub-o0my.onrender.com</string>
+    <string name="server_settings">服务器</string>
+    <string name="server_preset_cloud">云端 (Render)</string>
+    <string name="server_preset_emulator">模拟器 (本机)</string>
+    <string name="server_custom">自定义 (公司服务器)</string>
+    <string name="server_save">保存服务器</string>
     <string name="remember_login">记住登录</string>
     <string name="sign_in">登录</string>
     <string name="create_account">创建账号</string>

@@ -43,6 +43,7 @@ import com.workhub.shared.WorkspaceCreate
 import com.workhub.shared.WorkspaceDto
 import com.workhub.shared.WsEvent
 import org.jetbrains.exposed.sql.ResultRow
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.*
@@ -53,6 +54,7 @@ import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.auth.principal
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.callloging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.statuspages.StatusPages
@@ -95,6 +97,7 @@ fun main() {
 
 fun Application.module() {
     DatabaseFactory.init()
+    install(CallLogging)
     install(ContentNegotiation) {
         json(json)
     }
@@ -136,8 +139,14 @@ fun Application.module() {
         }
     }
     routing {
+        get("/") {
+            call.respondText("WorkHub API is running", ContentType.Text.Plain)
+        }
         get("/health") {
-            call.respondText("ok")
+            call.respondText("ok", ContentType.Text.Plain)
+        }
+        get("/healthz") {
+            call.respondText("ok", ContentType.Text.Plain)
         }
         post("/auth/register") {
             val response = Repository.register(call.receive())

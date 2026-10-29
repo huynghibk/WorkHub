@@ -237,7 +237,12 @@
     <string name="login_subtitle">Nơi làm việc của nhóm bạn.</string>
     <string name="login_field">Email hoặc username</string>
     <string name="server_url">Địa chỉ máy chủ</string>
-    <string name="server_url_hint">VD: http://192.168.1.10:8080</string>
+    <string name="server_url_hint">VD: https://workhub-o0my.onrender.com</string>
+    <string name="server_settings">Máy chủ</string>
+    <string name="server_preset_cloud">Cloud (Render)</string>
+    <string name="server_preset_emulator">Emulator (máy dev)</string>
+    <string name="server_custom">Tùy chỉnh (server công ty)</string>
+    <string name="server_save">Lưu máy chủ</string>
     <string name="remember_login">Ghi nhớ đăng nhập</string>
     <string name="sign_in">Đăng nhập</string>
     <string name="create_account">Tạo tài khoản</string>
