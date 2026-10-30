@@ -108,6 +108,12 @@ private fun LoginScreen(onRegister: () -> Unit) {
             )
             if (vm.busy) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                Text(
+                    "Đang kết nối máy chủ (có thể mất ~30s nếu Render đang ngủ)…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
             }
             TextButton(onClick = onRegister, modifier = Modifier.align(Alignment.CenterHorizontally)) {
                 Text(stringResource(R.string.create_account))

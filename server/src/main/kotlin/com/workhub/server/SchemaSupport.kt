@@ -1,12 +1,9 @@
 package com.workhub.server
 
 import org.jetbrains.exposed.sql.Column
-import org.jetbrains.exposed.sql.EqOp
-import org.jetbrains.exposed.sql.IsNullOp
 import org.jetbrains.exposed.sql.Op
+import org.jetbrains.exposed.sql.SqlExpressionBuilder
 import org.jetbrains.exposed.sql.Table
-import org.jetbrains.exposed.sql.and
-import org.jetbrains.exposed.sql.booleanLiteral
 
 /** Max length for shared sequential string IDs ("1", "2", ...). */
 const val ID_LEN = 50
@@ -26,8 +23,14 @@ fun Table.sysIsActive() = bool("is_active").default(true)
 fun Table.sysDeletedAt() = long("deleted_at").nullable()
 
 /** Predicate: row is not soft-deleted. */
-fun alive(deletedAt: Column<Long?>): Op<Boolean> = IsNullOp(deletedAt)
+fun alive(deletedAt: Column<Long?>): Op<Boolean> =
+    with(SqlExpressionBuilder) { deletedAt.isNull() }
 
-/** Predicate: active and not deleted. */
+/**
+ * Active + not soft-deleted.
+ * Treat NULL is_active as active (legacy rows after ALTER ADD COLUMN).
+ */
 fun usable(isActive: Column<Boolean>, deletedAt: Column<Long?>): Op<Boolean> =
-    EqOp(isActive, booleanLiteral(true)) and IsNullOp(deletedAt)
+    with(SqlExpressionBuilder) {
+        deletedAt.isNull() and ((isActive eq true) or isActive.isNull())
+    }

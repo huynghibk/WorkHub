@@ -922,6 +922,8 @@ private object Repository {
             it[locationUrl] = cleanLocationUrl(request.locationUrl)
             it[createdAt] = now
             it[updatedAt] = now
+            it[isActive] = true
+            it[deletedAt] = null
         }
         Notes.select { Notes.id eq id }.single().toNote(memberNames(companyId))
     }
@@ -1214,7 +1216,9 @@ private object Repository {
     }
 
     private fun visibleSpaces(companyId: String, userId: String, role: String): List<ResultRow> =
-        Spaces.select { Spaces.companyId eq companyId }
+        Spaces.select {
+            (Spaces.companyId eq companyId) and usable(Spaces.isActive, Spaces.deletedAt)
+        }
             .orderBy(Spaces.name to SortOrder.ASC)
             .filter { space ->
                 !space[Spaces.isPrivate] || role == "ADMIN" || spaceMember(space[Spaces.id], userId)
@@ -1266,7 +1270,9 @@ private object Repository {
 
     private fun visibleListIds(companyId: String, userId: String, role: String): Set<String> {
         val spaceIds = visibleSpaces(companyId, userId, role).map { it[Spaces.id] }.toSet()
-        return WorkLists.select { WorkLists.companyId eq companyId }
+        return WorkLists.select {
+            (WorkLists.companyId eq companyId) and usable(WorkLists.isActive, WorkLists.deletedAt)
+        }
             .filter { it[WorkLists.spaceId] in spaceIds }
             .map { it[WorkLists.id] }
             .toSet()
@@ -1346,6 +1352,8 @@ private object Repository {
             it[locationUrl] = cleanLocationUrl(request.locationUrl)
             it[createdAt] = now
             it[updatedAt] = now
+            it[isActive] = true
+            it[deletedAt] = null
         }
         replaceAssignees(id, people)
         if (children.isNotEmpty()) {

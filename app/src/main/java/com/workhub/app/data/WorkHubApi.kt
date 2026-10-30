@@ -110,9 +110,10 @@ class WorkHubApi(private val session: SessionStore) {
     }
 
     /**
-     * Render free sleeps ~15' idle. First call can take 30–90s — retry /health before auth.
+     * Render free sleeps ~15' idle. Prefer waking via /health, but don't block auth for a full minute.
+     * JWT is stateless — same account may sign in on many devices at once.
      */
-    suspend fun ensureAwake(maxAttempts: Int = 12) {
+    suspend fun ensureAwake(maxAttempts: Int = 4) {
         var last: Exception? = null
         repeat(maxAttempts) {
             try {
@@ -122,28 +123,48 @@ class WorkHubApi(private val session: SessionStore) {
                 throw error
             } catch (error: Exception) {
                 last = error
-                delay(5_000)
+                delay(2_500)
             }
         }
-        throw ApiException(
-            last?.message
-                ?: "Máy chủ Render đang ngủ/khởi động. Mở https://workhub-c0my.onrender.com/health trên trình duyệt, chờ chữ ok rồi thử lại.",
-        )
+        // Soft-fail: caller can still try the real request (also wakes Render).
+        if (last != null) return
     }
 
     suspend fun login(login: String, password: String): AuthResponse {
         ensureAwake()
-        return send(
-            HttpMethod.Post,
-            "/auth/login",
-            LoginRequest(email = login, password = password, login = login),
-            auth = false,
-        )
+        return authWithRetry {
+            send(
+                HttpMethod.Post,
+                "/auth/login",
+                LoginRequest(email = login, password = password, login = login),
+                auth = false,
+            )
+        }
     }
 
     suspend fun register(request: RegisterRequest): AuthResponse {
         ensureAwake()
-        return send(HttpMethod.Post, "/auth/register", request, auth = false)
+        return authWithRetry {
+            send(HttpMethod.Post, "/auth/register", request, auth = false)
+        }
+    }
+
+    private suspend fun <T> authWithRetry(block: suspend () -> T): T {
+        var last: Exception? = null
+        repeat(5) { attempt ->
+            try {
+                return block()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                last = error
+                if (attempt < 4) delay(3_000)
+            }
+        }
+        throw ApiException(
+            last?.message
+                ?: "Không kết nối được máy chủ. Mở /health trên trình duyệt, chờ ok rồi thử lại.",
+        )
     }
 
     suspend fun updateProfile(update: ProfileUpdate): UserDto {
