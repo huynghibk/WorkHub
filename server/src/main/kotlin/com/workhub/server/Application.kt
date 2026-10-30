@@ -303,7 +303,15 @@ fun Application.module() {
                 }
                 post("/{id}/messages") {
                     val body = call.receive<MessageWrite>()
-                    val saved = Repository.addMessage(call.companyId(), call.userId(), call.memberRole(), call.channelId(), body.body, body.parentId)
+                    val saved = Repository.addMessage(
+                        call.companyId(),
+                        call.userId(),
+                        call.memberRole(),
+                        call.channelId(),
+                        body.body,
+                        body.parentId,
+                        body.locationUrl,
+                    )
                     ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
                 }
@@ -750,6 +758,7 @@ private object Repository {
                 it[assigneeId] = people.firstOrNull()
                 it[dueAt] = request.dueAt
                 it[startAt] = request.startAt
+                it[locationUrl] = cleanLocationUrl(request.locationUrl)
                 it[updatedAt] = System.currentTimeMillis()
             }
             replaceAssignees(existing[Tasks.id], people)
@@ -878,6 +887,7 @@ private object Repository {
             it[title] = request.cleanTitle()
             it[body] = request.cleanBody()
             it[dueAt] = request.dueAt
+            it[locationUrl] = cleanLocationUrl(request.locationUrl)
             it[createdAt] = now
             it[updatedAt] = now
         }
@@ -892,6 +902,7 @@ private object Repository {
             it[title] = request.cleanTitle()
             it[body] = request.cleanBody()
             it[dueAt] = request.dueAt
+            it[locationUrl] = cleanLocationUrl(request.locationUrl)
             it[updatedAt] = System.currentTimeMillis()
         }
         Notes.select { Notes.id eq noteId }.single().toNote(memberNames(companyId))
@@ -1009,11 +1020,15 @@ private object Repository {
         channelId: String,
         rawBody: String,
         parentId: String?,
+        rawLocationUrl: String? = null,
     ): MessageDto {
         val (saved, notices) = db {
             val channel = requireVisibleChannel(companyId, userId, role, channelId)
             val body = rawBody.trim()
-            if (body.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Tin nhắn trống")
+            val location = cleanLocationUrl(rawLocationUrl)
+            if (body.isEmpty() && location == null) {
+                throw AppException(HttpStatusCode.BadRequest, "Tin nhắn trống")
+            }
             if (body.length > 2000) throw AppException(HttpStatusCode.BadRequest, "Tin nhắn tối đa 2000 ký tự")
             val threadId = parentId?.trim()?.ifBlank { null }
             if (threadId != null) {
@@ -1031,11 +1046,13 @@ private object Repository {
                 it[Messages.parentId] = threadId
                 it[senderId] = userId
                 it[Messages.body] = body
+                it[locationUrl] = location
                 it[createdAt] = now
             }
             val senderName = Users.select { Users.id eq userId }.singleOrNull()?.get(Users.name) ?: "Ẩn"
-            val saved = MessageDto(id, channelId, userId, senderName, body, now, threadId, 0)
-            saved to queueChatNotices(companyId, userId, channel, body)
+            val preview = body.ifBlank { location.orEmpty() }
+            val saved = MessageDto(id, channelId, userId, senderName, body, now, threadId, 0, location)
+            saved to queueChatNotices(companyId, userId, channel, preview)
         }
         deliverNotices(companyId, notices)
         return saved
@@ -1279,6 +1296,7 @@ private object Repository {
             it[creatorId] = userId
             it[dueAt] = request.dueAt
             it[startAt] = request.startAt
+            it[locationUrl] = cleanLocationUrl(request.locationUrl)
             it[createdAt] = now
             it[updatedAt] = now
         }

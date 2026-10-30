@@ -2,6 +2,7 @@ package com.workhub.app.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -9,6 +10,8 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
+import android.provider.Settings
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -20,6 +23,22 @@ fun hasLocationPermission(context: Context): Boolean {
     val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     return fine || coarse
+}
+
+fun isLocationEnabled(context: Context): Boolean {
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    return runCatching {
+        manager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }.getOrDefault(false)
+}
+
+fun openLocationSettings(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
 }
 
 fun isLikelyEmulator(): Boolean {
@@ -56,10 +75,10 @@ fun mapsUrlFrom(lat: Double, lng: Double): String =
 /**
  * Tries last-known first, then waits briefly for a fresh fix (helps emulator after setting a point).
  */
-suspend fun awaitBestLocation(context: Context, timeoutMs: Long = 8_000): Location? {
+suspend fun awaitBestLocation(context: Context, timeoutMs: Long = 15_000): Location? {
     if (!hasLocationPermission(context)) return null
+    if (!isLocationEnabled(context)) return null
     lastKnownLocation(context)?.let { cached ->
-        // Prefer a reasonably fresh reading.
         if (System.currentTimeMillis() - cached.time < 2 * 60 * 1000) return cached
     }
     val fresh = withTimeoutOrNull(timeoutMs) { requestSingleLocation(context) }
@@ -73,13 +92,13 @@ private suspend fun requestSingleLocation(context: Context): Location? =
             return@suspendCancellableCoroutine
         }
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val provider = when {
-            manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> {
-                cont.resume(null)
-                return@suspendCancellableCoroutine
-            }
+        val providers = buildList {
+            if (manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) add(LocationManager.NETWORK_PROVIDER)
+            if (manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) add(LocationManager.GPS_PROVIDER)
+        }
+        if (providers.isEmpty()) {
+            cont.resume(null)
+            return@suspendCancellableCoroutine
         }
         val listener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
@@ -95,9 +114,29 @@ private suspend fun requestSingleLocation(context: Context): Location? =
         cont.invokeOnCancellation {
             runCatching { manager.removeUpdates(listener) }
         }
-        runCatching {
-            manager.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
-        }.onFailure {
-            cont.resume(null)
+        var started = false
+        providers.forEach { provider ->
+            runCatching {
+                manager.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
+                started = true
+            }
         }
+        if (!started) cont.resume(null)
     }
+
+fun toastMissingLocation(context: Context) {
+    val msg = when {
+        !hasLocationPermission(context) ->
+            context.getString(com.workhub.app.R.string.location_permission_needed)
+        !isLocationEnabled(context) ->
+            context.getString(com.workhub.app.R.string.location_services_off)
+        isLikelyEmulator() ->
+            context.getString(com.workhub.app.R.string.location_emulator_hint)
+        else ->
+            context.getString(com.workhub.app.R.string.location_unavailable)
+    }
+    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    if (hasLocationPermission(context) && !isLocationEnabled(context)) {
+        openLocationSettings(context)
+    }
+}

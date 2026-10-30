@@ -96,13 +96,14 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var draft by remember { mutableStateOf("") }
+    var attachedLocation by remember { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
     var shareMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         graph.chatChromeVisible.value = false
         graph.attachLink.collect { link ->
-            draft = if (draft.isBlank()) link else "$draft\n$link"
+            attachedLocation = normalizeMapsShareLink(link) ?: link
         }
     }
     LaunchedEffect(Unit) {
@@ -358,6 +359,10 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                     }
                 }
             }
+            AttachedLocationBar(
+                locationUrl = attachedLocation,
+                onClear = { attachedLocation = null },
+            )
             Row(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -436,10 +441,12 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                 IconButton(
                     onClick = {
                         val text = draft
+                        val location = attachedLocation
                         draft = ""
-                        vm.send(text)
+                        attachedLocation = null
+                        vm.send(text, location)
                     },
-                    enabled = draft.isNotBlank() && vm.channel != null,
+                    enabled = (draft.isNotBlank() || !attachedLocation.isNullOrBlank()) && vm.channel != null,
                 ) {
                     Icon(Icons.Filled.Send, contentDescription = stringResource(R.string.send))
                 }
@@ -721,8 +728,9 @@ private fun MessageBubble(
     onMakeTask: () -> Unit,
 ) {
     val context = LocalContext.current
-    val mapsUrl = Regex("""https?://(?:www\.)?(?:maps\.google\.com|google\.com/maps)[^\s]*""")
-        .find(message.body)?.value
+    val mapsUrl = message.locationUrl?.takeIf { it.isNotBlank() }
+        ?: Regex("""https?://(?:www\.)?(?:maps\.google\.com|google\.com/maps)[^\s]*""")
+            .find(message.body)?.value
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
@@ -730,28 +738,30 @@ private fun MessageBubble(
         if (!mine) {
             Text(message.senderName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         }
-        Box(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .then(
-                    if (mapsUrl != null) {
-                        Modifier.clickable {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl)))
-                        }
-                    } else {
-                        Modifier
-                    },
+        if (message.body.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .background(
+                        color = if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(16.dp),
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    message.body,
+                    color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 )
-                .background(
-                    color = if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(16.dp),
-                )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        ) {
-            Text(
-                message.body,
-                color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-            )
+            }
+        }
+        if (mapsUrl != null) {
+            TextButton(
+                onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl)))
+                },
+            ) {
+                Text(stringResource(R.string.location_attached_label))
+            }
         }
         Text(formatTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
         Row {
@@ -962,12 +972,12 @@ class ChatViewModel(
         }
     }
 
-    fun send(body: String) {
+    fun send(body: String, locationUrl: String? = null) {
         val selected = channel ?: return
-        if (body.isBlank()) return
+        if (body.isBlank() && locationUrl.isNullOrBlank()) return
         viewModelScope.launch {
             try {
-                val saved = api.sendMessage(selected.id, body.trim(), thread?.id)
+                val saved = api.sendMessage(selected.id, body.trim(), thread?.id, locationUrl)
                 add(saved)
             } catch (e: Exception) {
                 error = e.userMessage()

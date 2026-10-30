@@ -4,6 +4,8 @@ App Android quản lý công việc, ghi chú và chat nội bộ cho một côn
 
 **Deploy public (Render / Fly miễn phí):** xem [DEPLOY.md](DEPLOY.md).
 
+> **Quan trọng:** trên Render Free, mỗi lần redeploy sẽ xoá H2 trong container. Gắn `DATABASE_URL` (Neon Postgres free) theo hướng dẫn trong DEPLOY.md để giữ tài khoản/workspace.
+
 ## Chạy backend
 
 Trong PowerShell, tại thư mục project:

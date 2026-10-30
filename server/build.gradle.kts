@@ -37,5 +37,6 @@ dependencies {
     implementation("org.jetbrains.exposed:exposed-core:0.53.0")
     implementation("org.jetbrains.exposed:exposed-jdbc:0.53.0")
     implementation("com.h2database:h2:2.2.224")
+    implementation("org.postgresql:postgresql:42.7.3")
     implementation("org.mindrot:jbcrypt:0.4")
 }

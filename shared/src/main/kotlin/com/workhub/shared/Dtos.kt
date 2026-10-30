@@ -145,6 +145,7 @@ data class TaskWrite(
     val startAt: Long? = null,
     val childIds: List<String> = emptyList(),
     val updateLinks: Boolean = false,
+    val locationUrl: String? = null,
 )
 
 @Serializable
@@ -167,6 +168,7 @@ data class TaskDto(
     val assigneeIds: List<String> = emptyList(),
     val assigneeNames: List<String> = emptyList(),
     val startAt: Long? = null,
+    val locationUrl: String? = null,
 )
 
 @Serializable
@@ -199,6 +201,7 @@ data class NoteWrite(
     val title: String,
     val body: String = "",
     val dueAt: Long? = null,
+    val locationUrl: String? = null,
 )
 
 @Serializable
@@ -210,6 +213,7 @@ data class NoteDto(
     val authorName: String,
     val updatedAt: Long,
     val dueAt: Long? = null,
+    val locationUrl: String? = null,
 )
 
 @Serializable
@@ -258,12 +262,14 @@ data class MessageDto(
     val createdAt: Long,
     val parentId: String? = null,
     val replyCount: Int = 0,
+    val locationUrl: String? = null,
 )
 
 @Serializable
 data class MessageWrite(
     val body: String,
     val parentId: String? = null,
+    val locationUrl: String? = null,
 )
 
 @Serializable

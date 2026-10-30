@@ -240,8 +240,13 @@ class WorkHubApi(private val session: SessionStore) {
         return send(HttpMethod.Get, path)
     }
 
-    suspend fun sendMessage(channelId: String, body: String, parentId: String? = null): MessageDto =
-        send(HttpMethod.Post, "/channels/$channelId/messages", MessageWrite(body, parentId))
+    suspend fun sendMessage(
+        channelId: String,
+        body: String,
+        parentId: String? = null,
+        locationUrl: String? = null,
+    ): MessageDto =
+        send(HttpMethod.Post, "/channels/$channelId/messages", MessageWrite(body, parentId, locationUrl))
 
     suspend fun messageToTask(channelId: String, messageId: String): TaskDto =
         send(HttpMethod.Post, "/channels/$channelId/messages/$messageId/task")

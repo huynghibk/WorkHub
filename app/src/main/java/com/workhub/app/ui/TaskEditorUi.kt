@@ -86,6 +86,7 @@ internal fun TaskEditor(
 ) {
     var title by remember(initial?.id) { mutableStateOf(initial?.title.orEmpty()) }
     var description by remember(initial?.id) { mutableStateOf(initial?.description.orEmpty()) }
+    var locationUrl by remember(initial?.id) { mutableStateOf(initial?.locationUrl) }
     var status by remember(initial?.id) { mutableStateOf(normalizeStatus(initial?.status)) }
     var priority by remember(initial?.id) { mutableStateOf(normalizePriority(initial?.priority, initial == null)) }
     var assigneeIds by remember(initial?.id) {
@@ -171,6 +172,7 @@ internal fun TaskEditor(
                 priority = priority,
                 childIds = if (linkMode == "CHILDREN") childPicks.toList() else emptyList(),
                 updateLinks = true,
+                locationUrl = locationUrl,
             ),
         ) { message ->
             saving = false
@@ -434,9 +436,12 @@ internal fun TaskEditor(
                     )
 
                     if (canSave) {
-                        LocationAttachActions { link ->
-                            description = if (description.isBlank()) link else "$description\n$link"
-                        }
+                        LocationAttachActions(
+                            locationUrl = locationUrl,
+                            onLocationChange = { locationUrl = it },
+                        )
+                    } else if (!locationUrl.isNullOrBlank()) {
+                        AttachedLocationBar(locationUrl = locationUrl)
                     }
 
                     if (showDetails) {

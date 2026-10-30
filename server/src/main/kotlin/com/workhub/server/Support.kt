@@ -151,6 +151,7 @@ fun ResultRow.toTask(names: Map<String, String>, lists: Map<String, String> = em
     },
     listName = this[Tasks.listId]?.let(lists::get).orEmpty(),
     startAt = this[Tasks.startAt],
+    locationUrl = this[Tasks.locationUrl],
 )
 
 fun ResultRow.toNote(names: Map<String, String>) = NoteDto(
@@ -161,7 +162,15 @@ fun ResultRow.toNote(names: Map<String, String>) = NoteDto(
     authorName = names[this[Notes.authorId]] ?: "Ẩn",
     updatedAt = this[Notes.updatedAt],
     dueAt = this[Notes.dueAt],
+    locationUrl = this[Notes.locationUrl],
 )
+
+fun cleanLocationUrl(raw: String?): String? {
+    val value = raw?.trim().orEmpty()
+    if (value.isEmpty()) return null
+    if (value.length > 500) throw AppException(HttpStatusCode.BadRequest, "Link vị trí tối đa 500 ký tự")
+    return value
+}
 
 fun ensureGeneralChannel(companyId: String) {
     val exists = Channels.select { (Channels.companyId eq companyId) and (Channels.name eq "Chung") }.any()
@@ -207,6 +216,7 @@ fun messageRows(channelId: String, parentId: String? = null): List<MessageDto> {
                 createdAt = row[Messages.createdAt],
                 parentId = row[Messages.parentId],
                 replyCount = replies,
+                locationUrl = row[Messages.locationUrl],
             )
         }
         .reversed()

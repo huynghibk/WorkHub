@@ -6,7 +6,14 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -14,6 +21,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.workhub.app.R
@@ -113,41 +122,86 @@ fun currentMapsUrl(context: Context): String? {
     return mapsUrlFrom(location.latitude, location.longitude)
 }
 
-fun toastMissingLocation(context: Context) {
-    val msg = if (isLikelyEmulator()) {
-        context.getString(R.string.location_emulator_hint)
-    } else {
-        context.getString(R.string.location_unavailable)
-    }
-    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-}
-
 fun mapsDirectionsUrl(from: String, to: String): String =
     "https://www.google.com/maps/dir/?api=1&origin=${Uri.encode(from)}&destination=${Uri.encode(to)}"
 
 @Composable
+fun AttachedLocationBar(
+    locationUrl: String?,
+    onClear: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    if (locationUrl.isNullOrBlank()) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TextButton(
+            onClick = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(locationUrl)),
+                    )
+                }
+            },
+            modifier = Modifier.weight(1f),
+        ) {
+            Text(
+                stringResource(R.string.location_attached_label),
+                maxLines = 1,
+            )
+        }
+        if (onClear != null) {
+            IconButton(onClick = onClear) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.location_clear),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun LocationAttachActions(
     enabled: Boolean = true,
-    onAttachLink: (String) -> Unit,
+    locationUrl: String? = null,
+    onLocationChange: (String?) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var showPicker by remember { mutableStateOf(false) }
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        TextButton(enabled = enabled, onClick = { showPicker = true }) {
-            Text(stringResource(R.string.attach_location))
-        }
-        TextButton(
-            enabled = enabled,
-            onClick = { openGoogleMaps(context) },
-        ) {
-            Text(stringResource(R.string.app_maps))
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        AttachedLocationBar(
+            locationUrl = locationUrl,
+            onClear = { onLocationChange(null) },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(enabled = enabled, onClick = { showPicker = true }) {
+                Text(
+                    if (locationUrl.isNullOrBlank()) {
+                        stringResource(R.string.attach_location)
+                    } else {
+                        stringResource(R.string.location_change)
+                    },
+                )
+            }
+            TextButton(
+                enabled = enabled,
+                onClick = { openGoogleMaps(context) },
+            ) {
+                Text(stringResource(R.string.app_maps))
+            }
         }
     }
     if (showPicker) {
         LocationPickerDialog(
             onDismiss = { showPicker = false },
             onPicked = { mapsUrl, _ ->
-                onAttachLink(normalizeMapsShareLink(mapsUrl) ?: mapsUrl)
+                onLocationChange(normalizeMapsShareLink(mapsUrl) ?: mapsUrl)
                 showPicker = false
                 android.widget.Toast.makeText(
                     context,

@@ -565,6 +565,7 @@ private fun TaskDto.write(status: String = this.status) = TaskWrite(
     priority = priority,
     assigneeIds = assigneeIds.ifEmpty { listOfNotNull(assigneeId) },
     startAt = startAt,
+    locationUrl = locationUrl,
 )
 
 private fun taskFactory(api: WorkHubApi) = object : ViewModelProvider.Factory {

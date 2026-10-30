@@ -13,3 +13,7 @@ services:
         value: /data
       - key: WORKHUB_JWT_SECRET
         generateValue: true
+      # Bắt buộc để data không mất khi redeploy (Neon free / Render Postgres).
+      # Dashboard → Environment → dán connection string Neon vào DATABASE_URL.
+      - key: DATABASE_URL
+        sync: false

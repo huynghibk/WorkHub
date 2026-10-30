@@ -12,19 +12,20 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import java.io.File
+import java.net.URI
 import java.util.UUID
 
 object DatabaseFactory {
     fun init() {
-        val dir = File(System.getenv("WORKHUB_DATA_DIR")?.takeIf { it.isNotBlank() } ?: "server/data")
-        dir.mkdirs()
-        val dbPath = File(dir, "workhub").absolutePath.replace('\\', '/')
-        Database.connect(
-            url = "jdbc:h2:file:$dbPath;DB_CLOSE_DELAY=-1",
-            driver = "org.h2.Driver",
-            user = "sa",
-            password = "",
-        )
+        val databaseUrl = System.getenv("DATABASE_URL")?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getenv("JDBC_DATABASE_URL")?.trim()?.takeIf { it.isNotBlank() }
+        if (databaseUrl != null) {
+            connectPostgres(databaseUrl)
+            println("WorkHub DB: PostgreSQL (persistent across deploys)")
+        } else {
+            connectH2()
+            println("WorkHub DB: H2 file — set DATABASE_URL (Neon) to keep data after Render redeploy")
+        }
         transaction {
             SchemaUtils.createMissingTablesAndColumns(
                 Companies,
@@ -50,6 +51,87 @@ object DatabaseFactory {
             backfillMemberships()
             Companies.selectAll().forEach { seedWorkspaceWork(it[Companies.id]) }
         }
+    }
+
+    private fun connectH2() {
+        val dir = File(System.getenv("WORKHUB_DATA_DIR")?.takeIf { it.isNotBlank() } ?: "server/data")
+        dir.mkdirs()
+        val dbPath = File(dir, "workhub").absolutePath.replace('\\', '/')
+        Database.connect(
+            url = "jdbc:h2:file:$dbPath;DB_CLOSE_DELAY=-1",
+            driver = "org.h2.Driver",
+            user = "sa",
+            password = "",
+        )
+    }
+
+    /**
+     * Neon / Render Postgres URLs:
+     * postgresql://user:pass@host/db?sslmode=require
+     * jdbc:postgresql://host/db?...
+     */
+    private fun connectPostgres(raw: String) {
+        val parsed = parsePostgresUrl(raw)
+        Database.connect(
+            url = parsed.jdbcUrl,
+            driver = "org.postgresql.Driver",
+            user = parsed.user,
+            password = parsed.password,
+        )
+    }
+
+    internal data class PgConnect(val jdbcUrl: String, val user: String, val password: String)
+
+    internal fun parsePostgresUrl(raw: String): PgConnect {
+        val value = raw.trim()
+        if (value.startsWith("jdbc:postgresql://", ignoreCase = true)) {
+            val uri = URI(value.removePrefix("jdbc:"))
+            val userInfo = uri.userInfo
+            val user: String
+            val password: String
+            if (!userInfo.isNullOrBlank()) {
+                val parts = userInfo.split(":", limit = 2)
+                user = parts[0]
+                password = parts.getOrElse(1) { "" }
+            } else {
+                val q = uri.query.orEmpty().split('&').associate { pair ->
+                    val kv = pair.split('=', limit = 2)
+                    kv[0] to (kv.getOrNull(1) ?: "")
+                }
+                user = q["user"].orEmpty()
+                password = q["password"].orEmpty()
+            }
+            val host = uri.host ?: error("DATABASE_URL thiếu host")
+            val port = if (uri.port > 0) ":${uri.port}" else ""
+            val path = uri.path?.ifBlank { "/postgres" } ?: "/postgres"
+            val query = uri.query?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+            val jdbc = "jdbc:postgresql://$host$port$path$query"
+                .replace(Regex("[?&]user=[^&]*"), "")
+                .replace(Regex("[?&]password=[^&]*"), "")
+                .replace("?&", "?")
+                .trimEnd('?', '&')
+            return PgConnect(jdbc, user, password)
+        }
+
+        val normalized = when {
+            value.startsWith("postgres://", true) ->
+                "postgresql://" + value.substringAfter("://")
+            value.startsWith("postgresql://", true) -> value
+            else -> "postgresql://$value"
+        }
+        val uri = URI(normalized)
+        val userInfo = uri.userInfo ?: error("DATABASE_URL thiếu user:password")
+        val parts = userInfo.split(":", limit = 2)
+        val user = java.net.URLDecoder.decode(parts[0], Charsets.UTF_8)
+        val password = java.net.URLDecoder.decode(parts.getOrElse(1) { "" }, Charsets.UTF_8)
+        val host = uri.host ?: error("DATABASE_URL thiếu host")
+        val port = if (uri.port > 0) ":${uri.port}" else ""
+        val path = uri.path?.ifBlank { "/postgres" } ?: "/postgres"
+        var query = uri.query.orEmpty()
+        if (!query.contains("sslmode=", ignoreCase = true)) {
+            query = if (query.isBlank()) "sslmode=require" else "$query&sslmode=require"
+        }
+        return PgConnect("jdbc:postgresql://$host$port$path?$query", user, password)
     }
 }
 
@@ -139,6 +221,7 @@ object Tasks : Table("tasks") {
     val creatorId = varchar("creator_id", 36)
     val startAt = long("start_at").nullable()
     val dueAt = long("due_at").nullable()
+    val locationUrl = varchar("location_url", 500).nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
     override val primaryKey = PrimaryKey(id)
@@ -151,6 +234,7 @@ object Notes : Table("notes") {
     val title = varchar("title", 200)
     val body = varchar("body", 20000)
     val dueAt = long("due_at").nullable()
+    val locationUrl = varchar("location_url", 500).nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
     override val primaryKey = PrimaryKey(id)
@@ -196,6 +280,7 @@ object Messages : Table("messages") {
     val parentId = varchar("parent_id", 36).nullable()
     val senderId = varchar("sender_id", 36)
     val body = varchar("body", 2000)
+    val locationUrl = varchar("location_url", 500).nullable()
     val createdAt = long("created_at")
     override val primaryKey = PrimaryKey(id)
 }

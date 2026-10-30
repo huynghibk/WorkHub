@@ -32,6 +32,11 @@
     <string name="share_via_wechat">Share via WeChat</string>
     <string name="share_location_text">My location from WorkHub: %1$s</string>
     <string name="location_unavailable">Location unavailable. Search a place or open Maps.</string>
+    <string name="location_permission_needed">Allow Location permission for WorkHub in app settings.</string>
+    <string name="location_services_off">Device location is off. Open location settings and try again.</string>
+    <string name="location_attached_label">📍 Location attached</string>
+    <string name="location_clear">Remove location</string>
+    <string name="location_change">Change location</string>
     <string name="location_emulator_hint">Emulator: Extended Controls → Location → set a point / Play route, then tap My location again. Fake GPS is accurate only after you set a location.</string>
     <string name="maps_search_hint">Search places or directions…</string>
     <string name="maps_search_action">Search</string>

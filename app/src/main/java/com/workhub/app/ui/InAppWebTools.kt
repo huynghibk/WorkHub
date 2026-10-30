@@ -127,7 +127,29 @@ fun MapsInAppScreen(
     val locationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->
-        if (grants.values.any { it }) goMyLocation() else toastMissingLocation(context)
+        if (grants.values.any { it }) {
+            if (!isLocationEnabled(context)) {
+                toastMissingLocation(context)
+            } else {
+                goMyLocation()
+            }
+        } else {
+            toastMissingLocation(context)
+        }
+    }
+
+    // Xin quyền vị trí ngay khi vào Maps (không đợi bấm "Vị trí của tôi").
+    LaunchedEffect(Unit) {
+        if (!hasLocationPermission(context)) {
+            locationPermission.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                ),
+            )
+        } else if (!isLocationEnabled(context)) {
+            toastMissingLocation(context)
+        }
     }
 
     LaunchedEffect(webView) {
@@ -429,9 +451,21 @@ private fun WebToolView(
                 settings.cacheMode = WebSettings.LOAD_DEFAULT
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 settings.userAgentString = settings.userAgentString.replace("; wv", "")
+                @Suppress("DEPRECATION")
+                settings.setGeolocationEnabled(true)
                 webChromeClient = object : WebChromeClient() {
                     override fun onProgressChanged(view: WebView?, newProgress: Int) {
                         onProgress(newProgress / 100f)
+                    }
+
+                    override fun onGeolocationPermissionsShowPrompt(
+                        origin: String?,
+                        callback: android.webkit.GeolocationPermissions.Callback?,
+                    ) {
+                        // Google Maps WebView needs this + Android location runtime permission.
+                        val allow = hasLocationPermission(context)
+                        callback?.invoke(origin, allow, false)
+                        if (!allow) toastMissingLocation(context)
                     }
                 }
                 webViewClient = object : WebViewClient() {

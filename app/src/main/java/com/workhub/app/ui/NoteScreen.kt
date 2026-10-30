@@ -172,6 +172,7 @@ private fun NoteEditor(
     var title by remember(initial?.id) { mutableStateOf(initial?.title.orEmpty()) }
     var body by remember(initial?.id) { mutableStateOf(initial?.body.orEmpty()) }
     var dueAt by remember(initial?.id) { mutableStateOf(initial?.dueAt) }
+    var locationUrl by remember(initial?.id) { mutableStateOf(initial?.locationUrl) }
     var formError by remember { mutableStateOf<String?>(null) }
     val titleError = stringResource(R.string.task_title_required)
     EditorDialog(
@@ -192,7 +193,7 @@ private fun NoteEditor(
                 return@EditorDialog
             }
             formError = null
-            onSave(NoteWrite(title.trim(), body.trim(), dueAt))
+            onSave(NoteWrite(title.trim(), body.trim(), dueAt, locationUrl))
         },
         onDelete = onDelete,
     ) {
@@ -200,9 +201,13 @@ private fun NoteEditor(
         OutlinedField(body, { body = it }, stringResource(R.string.field_body), singleLine = false)
         DateField(stringResource(R.string.note_due), dueAt, { dueAt = it }, enabled = canSave && !saving)
         if (canSave) {
-            LocationAttachActions { link ->
-                body = if (body.isBlank()) link else "$body\n$link"
-            }
+            LocationAttachActions(
+                enabled = !saving,
+                locationUrl = locationUrl,
+                onLocationChange = { locationUrl = it },
+            )
+        } else if (!locationUrl.isNullOrBlank()) {
+            AttachedLocationBar(locationUrl = locationUrl)
         }
     }
 }

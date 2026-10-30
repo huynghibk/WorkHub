@@ -6,7 +6,7 @@ Mục tiêu: backend có URL công khai (`https://….onrender.com`) để mọi
 
 | Dịch vụ | Miễn phí? | Ghi chú |
 |--------|-----------|--------|
-| **[Render](https://render.com)** | Có (Free Web Service) | Dễ nhất. Máy **ngủ** sau ~15 phút không dùng → lần mở lại chậm ~30–60s. Disk free **không bền** (redeploy có thể mất DB H2). |
+| **[Render](https://render.com)** | Có (Free Web Service) | Dễ nhất. Máy **ngủ** sau ~15 phút không dùng → lần mở lại chậm ~30–60s. **Bắt buộc** gắn `DATABASE_URL` Neon nếu không muốn mất data mỗi lần deploy. |
 | **[Fly.io](https://fly.io)** | Có hạn mức free | Cần cài `flyctl`, thẻ tín dụng để verify (thường không trừ tiền nếu trong hạn mức). |
 | **[Koyeb](https://www.koyeb.com)** | Có Free | Tương tự Render. |
 | **Google Cloud Run** | Free tier | Cần tài khoản Google Cloud; trả theo request, thường $0 với traffic nhỏ. |
@@ -64,8 +64,29 @@ URL: `https://workhub-api.fly.dev`
 
 ---
 
-## Lưu ý quan trọng
+## Lưu ý quan trọng — giữ data khi redeploy (bắt buộc nếu dùng thật)
 
-- DB hiện là **H2 file** trong container → free tier **mất dữ liệu** khi redeploy / sleep (Render). Demo OK; lâu dài nên chuyển Postgres (Neon free) — có thể làm bước sau.
+Render Free **xoá disk container mỗi lần deploy**. H2 trong `/data` sẽ mất → tài khoản/workspace biến mất.
+
+### Cách đúng (miễn phí): Neon Postgres
+
+1. Tạo project tại [https://neon.tech](https://neon.tech) (free).
+2. Copy **Connection string** dạng:
+   `postgresql://user:pass@ep-xxxx.aws.neon.tech/neondb?sslmode=require`
+3. Trên Render → Web Service → **Environment** → thêm:
+   - Key: `DATABASE_URL`
+   - Value: (dán connection string Neon)
+4. **Manual Deploy** lại service.
+5. Log khởi động phải có dòng: `WorkHub DB: PostgreSQL (persistent across deploys)`.
+
+Sau đó mọi redeploy **không** xoá user/workspace nữa (data nằm trên Neon).
+
+> Lần đầu gắn Neon là DB trống — đăng ký lại tài khoản một lần. Các lần deploy sau giữ nguyên.
+
+### Không khuyến nghị
+
+- Chỉ dùng H2 + `/data` trên Render Free → data vẫn mất khi redeploy.
+- Persistent Disk của Render cần gói trả phí.
+
 - Đặt `WORKHUB_JWT_SECRET` khác giá trị mặc định trên môi trường production.
 - WebSocket chat cần host hỗ trợ WS (Render/Fly đều được).

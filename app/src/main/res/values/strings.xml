@@ -32,6 +32,11 @@
     <string name="share_via_wechat">Chia sẻ WeChat</string>
     <string name="share_location_text">Vị trí của tôi trên WorkHub: %1$s</string>
     <string name="location_unavailable">Chưa lấy được vị trí. Hãy tìm địa điểm hoặc mở Maps.</string>
+    <string name="location_permission_needed">Cần cấp quyền Vị trí cho WorkHub trong Cài đặt ứng dụng.</string>
+    <string name="location_services_off">GPS/định vị thiết bị đang tắt. Mở Cài đặt vị trí rồi thử lại.</string>
+    <string name="location_attached_label">📍 Vị trí đã gắn</string>
+    <string name="location_clear">Gỡ vị trí</string>
+    <string name="location_change">Đổi vị trí</string>
     <string name="location_emulator_hint">Emulator: Extended Controls → Location → đặt điểm / Play route, rồi bấm Vị trí của tôi lại. GPS ảo chỉ chính xác sau khi bạn set location.</string>
     <string name="maps_search_hint">Tìm địa điểm, đường đi…</string>
     <string name="maps_search_action">Tìm</string>
