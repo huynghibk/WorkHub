@@ -1,8 +1,8 @@
 package com.workhub.server
 
 import org.jetbrains.exposed.sql.Column
+import org.jetbrains.exposed.sql.IsNullOp
 import org.jetbrains.exposed.sql.Op
-import org.jetbrains.exposed.sql.SqlExpressionBuilder
 import org.jetbrains.exposed.sql.Table
 
 /** Max length for shared sequential string IDs ("1", "2", ...). */
@@ -17,20 +17,19 @@ const val URL_LEN = 500
  * - is_active: soft disable without deleting
  * - deleted_at: soft delete (null = alive)
  */
-fun Table.sysCreatedAt() = long("created_at")
-fun Table.sysUpdatedAt() = long("updated_at").default(0L)
-fun Table.sysIsActive() = bool("is_active").default(true)
-fun Table.sysDeletedAt() = long("deleted_at").nullable()
+fun Table.sysCreatedAt(): Column<Long> = long("created_at")
+fun Table.sysUpdatedAt(): Column<Long> = long("updated_at").default(0L)
+fun Table.sysIsActive(): Column<Boolean> = bool("is_active").default(true)
+fun Table.sysDeletedAt(): Column<Long?> = long("deleted_at").nullable()
 
-/** Predicate: row is not soft-deleted. */
-fun alive(deletedAt: Column<Long?>): Op<Boolean> =
-    with(SqlExpressionBuilder) { deletedAt.isNull() }
+/** Predicate: row is not soft-deleted (deleted_at IS NULL). */
+fun alive(deletedAt: Column<Long?>): Op<Boolean> = IsNullOp(deletedAt)
 
 /**
- * Active + not soft-deleted.
- * Treat NULL is_active as active (legacy rows after ALTER ADD COLUMN).
+ * Row is usable for queries.
+ * Only soft-delete is enforced here (deleted_at). is_active is kept on the row for
+ * future disable flows; filtering on it previously hid legacy NULL/false rows after ALTER.
  */
+@Suppress("UNUSED_PARAMETER")
 fun usable(isActive: Column<Boolean>, deletedAt: Column<Long?>): Op<Boolean> =
-    with(SqlExpressionBuilder) {
-        deletedAt.isNull() and ((isActive eq true) or isActive.isNull())
-    }
+    IsNullOp(deletedAt)

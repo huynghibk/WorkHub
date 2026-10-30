@@ -11,8 +11,8 @@ COPY server ./server
 
 # Render free builders are memory-tight; keep Gradle heap modest.
 ENV GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"
+# On failure, scroll ABOVE the Java stacktrace for lines starting with "e: file://" (real Kotlin errors).
 RUN chmod +x gradlew \
-    && ./gradlew :server:compileKotlin --no-daemon --stacktrace -x test \
     && ./gradlew :server:installDist --no-daemon --stacktrace -x test
 
 FROM eclipse-temurin:17-jre-jammy
