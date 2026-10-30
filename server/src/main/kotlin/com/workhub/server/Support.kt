@@ -92,7 +92,7 @@ fun TaskWrite.cleanDescription(): String {
 
 fun NoteWrite.cleanBody(): String {
     val value = body.trim()
-    if (value.length > 20000) throw AppException(HttpStatusCode.BadRequest, "Nội dung tối đa 20000 ký tự")
+    if (value.length > 8000) throw AppException(HttpStatusCode.BadRequest, "Nội dung tối đa 8000 ký tự")
     return value
 }
 
@@ -173,14 +173,18 @@ fun cleanLocationUrl(raw: String?): String? {
 }
 
 fun ensureGeneralChannel(companyId: String) {
-    val exists = Channels.select { (Channels.companyId eq companyId) and (Channels.name eq "Chung") }.any()
+    val exists = Channels.select {
+        (Channels.companyId eq companyId) and (Channels.name eq "Chung") and alive(Channels.deletedAt)
+    }.any()
     if (exists) return
+    val now = System.currentTimeMillis()
     Channels.insert {
-        it[id] = UUID.randomUUID().toString()
+        it[id] = nextId()
         it[Channels.companyId] = companyId
         it[Channels.name] = "Chung"
         it[isPrivate] = false
-        it[createdAt] = System.currentTimeMillis()
+        it[createdAt] = now
+        it[updatedAt] = now
     }
 }
 
@@ -195,7 +199,7 @@ fun requireChannel(companyId: String, channelId: String) {
 fun messageRows(channelId: String, parentId: String? = null): List<MessageDto> {
     return Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
         .select {
-            val inChannel = Messages.channelId eq channelId
+            val inChannel = (Messages.channelId eq channelId) and alive(Messages.deletedAt)
             if (parentId == null) inChannel and Messages.parentId.isNull() else inChannel and (Messages.parentId eq parentId)
         }
         .orderBy(Messages.createdAt to SortOrder.DESC)

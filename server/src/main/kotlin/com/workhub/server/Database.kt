@@ -13,7 +13,6 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import java.io.File
 import java.net.URI
-import java.util.UUID
 
 object DatabaseFactory {
     fun init() {
@@ -28,6 +27,7 @@ object DatabaseFactory {
         }
         transaction {
             SchemaUtils.createMissingTablesAndColumns(
+                IdCounters,
                 Companies,
                 Users,
                 Memberships,
@@ -47,8 +47,10 @@ object DatabaseFactory {
                 TaskComments,
                 TaskAssignees,
             )
+            ensureIdCounter()
             backfillAssignees()
             backfillMemberships()
+            backfillUpdatedAtFromCreatedAt()
             Companies.selectAll().forEach { seedWorkspaceWork(it[Companies.id]) }
         }
     }
@@ -135,202 +137,422 @@ object DatabaseFactory {
     }
 }
 
+/** Shared numeric ID sequence for every entity table ("1", "2", …). */
+object IdCounters : Table("id_counters") {
+    val name = varchar("name", 40)
+    val nextValue = long("next_value")
+    override val primaryKey = PrimaryKey(name)
+}
+
+/**
+ * Next shared ID as a decimal string starting at 1.
+ * Must run inside an Exposed transaction (e.g. `db { }`).
+ */
+fun nextId(): String {
+    val key = "global"
+    val row = IdCounters.select { IdCounters.name eq key }.forUpdate().singleOrNull()
+    if (row == null) {
+        IdCounters.insert {
+            it[name] = key
+            it[nextValue] = 2L
+        }
+        return "1"
+    }
+    val current = row[IdCounters.nextValue]
+    require(current >= 1L) { "ID sequence invalid" }
+    require(current.toString().length <= ID_LEN) { "ID sequence vượt quá $ID_LEN ký tự" }
+    IdCounters.update({ IdCounters.name eq key }) {
+        it[nextValue] = current + 1L
+    }
+    return current.toString()
+}
+
+private fun ensureIdCounter() {
+    val key = "global"
+    if (IdCounters.select { IdCounters.name eq key }.any()) return
+    val existing = buildList {
+        addAll(Users.selectAll().map { it[Users.id] })
+        addAll(Companies.selectAll().map { it[Companies.id] })
+        addAll(Memberships.selectAll().map { it[Memberships.id] })
+        addAll(Tasks.selectAll().map { it[Tasks.id] })
+        addAll(Notes.selectAll().map { it[Notes.id] })
+        addAll(Channels.selectAll().map { it[Channels.id] })
+        addAll(Messages.selectAll().map { it[Messages.id] })
+        addAll(Notifications.selectAll().map { it[Notifications.id] })
+        addAll(Spaces.selectAll().map { it[Spaces.id] })
+        addAll(Folders.selectAll().map { it[Folders.id] })
+        addAll(WorkLists.selectAll().map { it[WorkLists.id] })
+        addAll(Divisions.selectAll().map { it[Divisions.id] })
+        addAll(Departments.selectAll().map { it[Departments.id] })
+        addAll(Teams.selectAll().map { it[Teams.id] })
+        addAll(TaskComments.selectAll().map { it[TaskComments.id] })
+        addAll(ChannelMembers.selectAll().map { it[ChannelMembers.id] })
+        addAll(SpaceMembers.selectAll().map { it[SpaceMembers.id] })
+    }
+    val maxNumeric = existing.mapNotNull { it.toLongOrNull() }.maxOrNull() ?: 0L
+    IdCounters.insert {
+        it[name] = key
+        it[nextValue] = maxNumeric + 1L
+    }
+}
+
 object Memberships : Table("memberships") {
-    val id = varchar("id", 36)
-    val userId = varchar("user_id", 36)
-    val workspaceId = varchar("workspace_id", 36).index()
+    val id = varchar("id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val workspaceId = varchar("workspace_id", ID_LEN)
     val role = varchar("member_role", 20)
-    val divisionId = varchar("division_id", 36).nullable()
-    val departmentId = varchar("department_id", 36).nullable()
-    val teamId = varchar("team_id", 36).nullable()
-    val createdAt = long("created_at")
+    val divisionId = varchar("division_id", ID_LEN).nullable()
+    val departmentId = varchar("department_id", ID_LEN).nullable()
+    val teamId = varchar("team_id", ID_LEN).nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
 
     init {
-        uniqueIndex(userId, workspaceId)
+        uniqueIndex("uq_memberships_user_workspace", userId, workspaceId)
+        index("idx_memberships_workspace_id", false, workspaceId)
+        index("idx_memberships_user_id", false, userId)
     }
 }
 
 object Companies : Table("companies") {
-    val id = varchar("id", 36)
+    val id = varchar("id", ID_LEN)
     val name = varchar("name", 120)
-    val inviteCode = varchar("invite_code", 12).uniqueIndex()
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Users : Table("users") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val name = varchar("name", 80)
-    val username = varchar("username", 30).nullable().uniqueIndex()
-    val email = varchar("email", 160).uniqueIndex()
-    val passwordHash = varchar("password_hash", 80)
-    val role = varchar("user_role", 20).default("MEMBER")
-    val divisionId = varchar("division_id", 36).nullable()
-    val departmentId = varchar("department_id", 36).nullable()
-    val teamId = varchar("team_id", 36).nullable()
-    /** data:image/...;base64,... (nén phía client). */
-    val avatarDataUrl = text("avatar_data_url").nullable()
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Divisions : Table("divisions") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val name = varchar("name", 120)
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Departments : Table("departments") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val divisionId = varchar("division_id", 36).index()
-    val name = varchar("name", 120)
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object TaskAssignees : Table("task_assignees") {
-    val taskId = varchar("task_id", 36)
-    val userId = varchar("user_id", 36).index()
-    override val primaryKey = PrimaryKey(taskId, userId)
-}
-
-object Teams : Table("teams") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val departmentId = varchar("department_id", 36).index()
-    val name = varchar("name", 120)
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Tasks : Table("tasks") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val listId = varchar("list_id", 36).nullable()
-    val parentId = varchar("parent_id", 36).nullable()
-    val title = varchar("title", 200)
-    val description = varchar("description", 4000)
-    val status = varchar("status", 20)
-    val priority = varchar("priority", 20).nullable().default("NORMAL")
-    val assigneeId = varchar("assignee_id", 36).nullable()
-    val creatorId = varchar("creator_id", 36)
-    val startAt = long("start_at").nullable()
-    val dueAt = long("due_at").nullable()
-    val locationUrl = varchar("location_url", 500).nullable()
-    val createdAt = long("created_at")
-    val updatedAt = long("updated_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Notes : Table("notes") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val authorId = varchar("author_id", 36)
-    val title = varchar("title", 200)
-    val body = varchar("body", 20000)
-    val dueAt = long("due_at").nullable()
-    val locationUrl = varchar("location_url", 500).nullable()
-    val createdAt = long("created_at")
-    val updatedAt = long("updated_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Channels : Table("channels") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val name = varchar("name", 80)
-    val isPrivate = bool("is_private").default(false)
-    val kind = varchar("kind", 16).nullable()
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Notifications : Table("notifications") {
-    val id = varchar("id", 36)
-    val userId = varchar("user_id", 36).index()
-    val workspaceId = varchar("workspace_id", 36).index()
-    val kind = varchar("kind", 32)
-    val title = varchar("title", 200)
-    val body = varchar("body", 500)
-    val channelId = varchar("channel_id", 36).nullable()
-    val createdAt = long("created_at")
-    val seen = bool("is_read").default(false)
-    override val primaryKey = PrimaryKey(id)
-}
-
-object ChannelMembers : Table("channel_members") {
-    val id = varchar("id", 36)
-    val channelId = varchar("channel_id", 36).index()
-    val userId = varchar("user_id", 36)
+    val inviteCode = varchar("invite_code", 12)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
 
     init {
-        uniqueIndex(channelId, userId)
+        uniqueIndex("uq_companies_invite_code", inviteCode)
+    }
+}
+
+object Users : Table("users") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val name = varchar("name", 80)
+    val username = varchar("username", 30).nullable()
+    val email = varchar("email", 160)
+    val passwordHash = varchar("password_hash", 100)
+    val role = varchar("user_role", 20).default("MEMBER")
+    val divisionId = varchar("division_id", ID_LEN).nullable()
+    val departmentId = varchar("department_id", ID_LEN).nullable()
+    val teamId = varchar("team_id", ID_LEN).nullable()
+    /**
+     * Temporary: inline avatar data-URL. Production nên đẩy file lên object storage
+     * và chỉ lưu URL VARCHAR(URL_LEN).
+     */
+    val avatarDataUrl = text("avatar_data_url").nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        uniqueIndex("uq_users_email", email)
+        uniqueIndex("uq_users_username", username)
+        index("idx_users_company_id", false, companyId)
+    }
+}
+
+object Divisions : Table("divisions") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val name = varchar("name", 120)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_divisions_company_id", false, companyId)
+    }
+}
+
+object Departments : Table("departments") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val divisionId = varchar("division_id", ID_LEN)
+    val name = varchar("name", 120)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_departments_company_id", false, companyId)
+        index("idx_departments_division_id", false, divisionId)
+    }
+}
+
+/** Junction: hard-replace on assignee sync; still tracks created_at. */
+object TaskAssignees : Table("task_assignees") {
+    val taskId = varchar("task_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val createdAt = long("created_at").default(0L)
+    override val primaryKey = PrimaryKey(taskId, userId)
+
+    init {
+        index("idx_task_assignees_user_id", false, userId)
+    }
+}
+
+object Teams : Table("teams") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val departmentId = varchar("department_id", ID_LEN)
+    val name = varchar("name", 120)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_teams_company_id", false, companyId)
+        index("idx_teams_department_id", false, departmentId)
+    }
+}
+
+object Tasks : Table("tasks") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val listId = varchar("list_id", ID_LEN).nullable()
+    val parentId = varchar("parent_id", ID_LEN).nullable()
+    val title = varchar("title", 200)
+    val description = varchar("description", 4000)
+    /** Business workflow status (TODO / DONE / …), not soft-delete. */
+    val status = varchar("status", 20)
+    val priority = varchar("priority", 20).nullable().default("NORMAL")
+    val assigneeId = varchar("assignee_id", ID_LEN).nullable()
+    val creatorId = varchar("creator_id", ID_LEN)
+    val startAt = long("start_at").nullable()
+    val dueAt = long("due_at").nullable()
+    val locationUrl = varchar("location_url", URL_LEN).nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_tasks_company_id", false, companyId)
+        index("idx_tasks_list_id", false, listId)
+        index("idx_tasks_parent_id", false, parentId)
+        index("idx_tasks_assignee_id", false, assigneeId)
+        index("idx_tasks_status", false, status)
+    }
+}
+
+object Notes : Table("notes") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val authorId = varchar("author_id", ID_LEN)
+    val title = varchar("title", 200)
+    val body = varchar("body", 8000)
+    val dueAt = long("due_at").nullable()
+    val locationUrl = varchar("location_url", URL_LEN).nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_notes_company_id", false, companyId)
+        index("idx_notes_author_id", false, authorId)
+    }
+}
+
+object Channels : Table("channels") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val name = varchar("name", 80)
+    val isPrivate = bool("is_private").default(false)
+    val kind = varchar("kind", 16).nullable().default("CHANNEL")
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_channels_company_id", false, companyId)
+    }
+}
+
+object Notifications : Table("notifications") {
+    val id = varchar("id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val workspaceId = varchar("workspace_id", ID_LEN)
+    val kind = varchar("kind", 32)
+    val title = varchar("title", 200)
+    val body = varchar("body", 500)
+    val channelId = varchar("channel_id", ID_LEN).nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    val seen = bool("is_read").default(false)
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_notifications_user_id", false, userId)
+        index("idx_notifications_workspace_id", false, workspaceId)
+    }
+}
+
+object ChannelMembers : Table("channel_members") {
+    val id = varchar("id", ID_LEN)
+    val channelId = varchar("channel_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        uniqueIndex("uq_channel_members_channel_user", channelId, userId)
+        index("idx_channel_members_channel_id", false, channelId)
+        index("idx_channel_members_user_id", false, userId)
     }
 }
 
 object Messages : Table("messages") {
-    val id = varchar("id", 36)
-    val channelId = varchar("channel_id", 36).index()
-    val parentId = varchar("parent_id", 36).nullable()
-    val senderId = varchar("sender_id", 36)
+    val id = varchar("id", ID_LEN)
+    val channelId = varchar("channel_id", ID_LEN)
+    val parentId = varchar("parent_id", ID_LEN).nullable()
+    val senderId = varchar("sender_id", ID_LEN)
     val body = varchar("body", 2000)
-    val locationUrl = varchar("location_url", 500).nullable()
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object Spaces : Table("spaces") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val name = varchar("name", 120)
-    val isPrivate = bool("is_private").default(false)
-    val createdAt = long("created_at")
-    override val primaryKey = PrimaryKey(id)
-}
-
-object SpaceMembers : Table("space_members") {
-    val id = varchar("id", 36)
-    val spaceId = varchar("space_id", 36).index()
-    val userId = varchar("user_id", 36)
+    val locationUrl = varchar("location_url", URL_LEN).nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
 
     init {
-        uniqueIndex(spaceId, userId)
+        index("idx_messages_channel_id", false, channelId)
+        index("idx_messages_parent_id", false, parentId)
+        index("idx_messages_sender_id", false, senderId)
+    }
+}
+
+object Spaces : Table("spaces") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val name = varchar("name", 120)
+    val isPrivate = bool("is_private").default(false)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_spaces_company_id", false, companyId)
+    }
+}
+
+object SpaceMembers : Table("space_members") {
+    val id = varchar("id", ID_LEN)
+    val spaceId = varchar("space_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        uniqueIndex("uq_space_members_space_user", spaceId, userId)
+        index("idx_space_members_space_id", false, spaceId)
+        index("idx_space_members_user_id", false, userId)
     }
 }
 
 object Folders : Table("folders") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val spaceId = varchar("space_id", 36).index()
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val spaceId = varchar("space_id", ID_LEN)
     val name = varchar("name", 120)
-    val createdAt = long("created_at")
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_folders_company_id", false, companyId)
+        index("idx_folders_space_id", false, spaceId)
+    }
 }
 
 object WorkLists : Table("work_lists") {
-    val id = varchar("id", 36)
-    val companyId = varchar("company_id", 36).index()
-    val spaceId = varchar("space_id", 36).index()
-    val folderId = varchar("folder_id", 36).nullable()
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN)
+    val spaceId = varchar("space_id", ID_LEN)
+    val folderId = varchar("folder_id", ID_LEN).nullable()
     val name = varchar("name", 120)
-    val createdAt = long("created_at")
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_work_lists_company_id", false, companyId)
+        index("idx_work_lists_space_id", false, spaceId)
+        index("idx_work_lists_folder_id", false, folderId)
+    }
 }
 
 object TaskComments : Table("task_comments") {
-    val id = varchar("id", 36)
-    val taskId = varchar("task_id", 36).index()
-    val authorId = varchar("author_id", 36)
+    val id = varchar("id", ID_LEN)
+    val taskId = varchar("task_id", ID_LEN)
+    val authorId = varchar("author_id", ID_LEN)
     val body = varchar("body", 2000)
-    val createdAt = long("created_at")
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
+
+    init {
+        index("idx_task_comments_task_id", false, taskId)
+        index("idx_task_comments_author_id", false, authorId)
+    }
+}
+
+/** Copy created_at → updated_at for rows that still have default 0 after schema upgrade. */
+private fun backfillUpdatedAtFromCreatedAt() {
+    Users.select { Users.updatedAt eq 0L }.forEach { row ->
+        Users.update({ Users.id eq row[Users.id] }) { it[updatedAt] = row[Users.createdAt] }
+    }
+    Companies.select { Companies.updatedAt eq 0L }.forEach { row ->
+        Companies.update({ Companies.id eq row[Companies.id] }) { it[updatedAt] = row[Companies.createdAt] }
+    }
+    Memberships.select { Memberships.updatedAt eq 0L }.forEach { row ->
+        Memberships.update({ Memberships.id eq row[Memberships.id] }) { it[updatedAt] = row[Memberships.createdAt] }
+    }
+    Channels.select { Channels.updatedAt eq 0L }.forEach { row ->
+        Channels.update({ Channels.id eq row[Channels.id] }) { it[updatedAt] = row[Channels.createdAt] }
+    }
+    Spaces.select { Spaces.updatedAt eq 0L }.forEach { row ->
+        Spaces.update({ Spaces.id eq row[Spaces.id] }) { it[updatedAt] = row[Spaces.createdAt] }
+    }
+    WorkLists.select { WorkLists.updatedAt eq 0L }.forEach { row ->
+        WorkLists.update({ WorkLists.id eq row[WorkLists.id] }) { it[updatedAt] = row[WorkLists.createdAt] }
+    }
 }
 
 private fun backfillAssignees() {
@@ -361,7 +583,7 @@ private fun backfillMemberships() {
         }.any()
         if (exists) return@forEach
         Memberships.insert {
-            it[id] = UUID.randomUUID().toString()
+            it[id] = nextId()
             it[Memberships.userId] = userId
             it[workspaceId] = companyId
             it[role] = if (user[Users.role] == "ADMIN") "ADMIN" else "MEMBER"
@@ -387,7 +609,7 @@ fun seedWorkspaceWork(companyId: String) {
         .orderBy(Spaces.createdAt to SortOrder.ASC)
         .firstOrNull()
         ?: run {
-            val spaceId = UUID.randomUUID().toString()
+            val spaceId = nextId()
             val now = System.currentTimeMillis()
             Spaces.insert {
                 it[id] = spaceId
@@ -395,19 +617,24 @@ fun seedWorkspaceWork(companyId: String) {
                 it[name] = "Chung"
                 it[isPrivate] = false
                 it[createdAt] = now
+                it[updatedAt] = now
             }
             Spaces.select { Spaces.id eq spaceId }.single()
         }
     val spaceId = space[Spaces.id]
-    val list = WorkLists.select { WorkLists.companyId eq companyId }.firstOrNull()
+    val list = WorkLists.select {
+        (WorkLists.companyId eq companyId) and usable(WorkLists.isActive, WorkLists.deletedAt)
+    }.firstOrNull()
         ?: run {
-            val listId = UUID.randomUUID().toString()
+            val listId = nextId()
+            val listNow = System.currentTimeMillis()
             WorkLists.insert {
                 it[id] = listId
                 it[WorkLists.companyId] = companyId
                 it[WorkLists.spaceId] = spaceId
                 it[name] = "Việc chung"
-                it[createdAt] = System.currentTimeMillis()
+                it[createdAt] = listNow
+                it[updatedAt] = listNow
             }
             WorkLists.select { WorkLists.id eq listId }.single()
         }

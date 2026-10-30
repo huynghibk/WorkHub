@@ -259,6 +259,7 @@
     <string name="hide_password">Ẩn mật khẩu</string>
     <string name="show_password">Hiện mật khẩu</string>
     <string name="sign_up">Đăng ký</string>
+    <string name="auth_waking_server">Đang đánh thức máy chủ (Render)… có thể mất ~1 phút</string>
     <string name="have_account">Đã có tài khoản</string>
     <string name="pick_workspace">Chọn workspace</string>
     <string name="workspace">Workspace</string>

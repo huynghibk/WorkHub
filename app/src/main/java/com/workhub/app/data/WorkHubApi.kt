@@ -60,6 +60,7 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -103,21 +104,47 @@ class WorkHubApi(private val session: SessionStore) {
             throw error
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
-            throw ApiException("Không kết nối được máy chủ. Hãy chắc backend đang chạy.")
+        } catch (error: Exception) {
+            throw ApiException(connectErrorMessage(error))
         }
     }
 
-    suspend fun login(login: String, password: String): AuthResponse =
-        send(
+    /**
+     * Render free sleeps ~15' idle. First call can take 30–90s — retry /health before auth.
+     */
+    suspend fun ensureAwake(maxAttempts: Int = 12) {
+        var last: Exception? = null
+        repeat(maxAttempts) {
+            try {
+                ping()
+                return
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                last = error
+                delay(5_000)
+            }
+        }
+        throw ApiException(
+            last?.message
+                ?: "Máy chủ Render đang ngủ/khởi động. Mở https://workhub-c0my.onrender.com/health trên trình duyệt, chờ chữ ok rồi thử lại.",
+        )
+    }
+
+    suspend fun login(login: String, password: String): AuthResponse {
+        ensureAwake()
+        return send(
             HttpMethod.Post,
             "/auth/login",
             LoginRequest(email = login, password = password, login = login),
             auth = false,
         )
+    }
 
-    suspend fun register(request: RegisterRequest): AuthResponse =
-        send(HttpMethod.Post, "/auth/register", request, auth = false)
+    suspend fun register(request: RegisterRequest): AuthResponse {
+        ensureAwake()
+        return send(HttpMethod.Post, "/auth/register", request, auth = false)
+    }
 
     suspend fun updateProfile(update: ProfileUpdate): UserDto {
         // Thử nhiều path vì một số bản server cũ chỉ có một trong các route này.
@@ -316,9 +343,18 @@ class WorkHubApi(private val session: SessionStore) {
             throw error
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
-            throw ApiException("Không kết nối được máy chủ. Hãy chắc backend đang chạy.")
+        } catch (error: Exception) {
+            throw ApiException(connectErrorMessage(error))
         }
+    }
+}
+
+private fun connectErrorMessage(error: Exception): String {
+    val detail = error.message?.lineSequence()?.firstOrNull()?.take(120).orEmpty()
+    return if (detail.isBlank()) {
+        "Không kết nối được máy chủ. Mở /health trên trình duyệt, chờ chữ ok (Render có thể đang ngủ ~1 phút) rồi thử lại."
+    } else {
+        "Không kết nối được máy chủ ($detail). Nếu Render vừa ngủ, mở /health chờ ok rồi thử lại."
     }
 }
 

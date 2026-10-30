@@ -371,6 +371,7 @@ class AuthViewModel(private val graph: AppGraph) : ViewModel() {
             error = null
             try {
                 graph.session.setBaseUrl(serverUrl)
+                // Render free may be asleep — ensureAwake() inside login waits for /health.
                 val response = graph.api.login(login.trim(), password)
                 if (remember) graph.session.rememberLogin(login.trim(), password) else graph.session.forgetLogin()
                 graph.session.save(response.token, response.user)
@@ -388,6 +389,7 @@ class AuthViewModel(private val graph: AppGraph) : ViewModel() {
             error = null
             try {
                 graph.session.setBaseUrl(serverUrl)
+                // ensureAwake() inside register waits while Render cold-starts.
                 val response = graph.api.register(request)
                 graph.session.save(response.token, response.user)
             } catch (e: Exception) {

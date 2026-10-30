@@ -84,7 +84,6 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -454,7 +453,8 @@ private object Repository {
             if (Users.select { Users.email eq emailAddress }.any()) {
                 throw AppException(HttpStatusCode.Conflict, "Email đã được dùng")
             }
-            val userId = UUID.randomUUID().toString()
+            val userId = nextId()
+            val now = System.currentTimeMillis()
             Users.insert {
                 it[id] = userId
                 it[companyId] = "none"
@@ -463,7 +463,8 @@ private object Repository {
                 it[Users.email] = emailAddress
                 it[passwordHash] = hash
                 it[role] = "MEMBER"
-                it[createdAt] = System.currentTimeMillis()
+                it[createdAt] = now
+                it[updatedAt] = now
             }
             AuthResponse(JwtTokens.issue(userId), accountDto(userId))
         }
@@ -505,18 +506,20 @@ private object Repository {
 
     private fun findAccount(raw: String): ResultRow? {
         val trimmed = raw.trim()
+        fun aliveUser(op: org.jetbrains.exposed.sql.Op<Boolean>) =
+            Users.select { op and usable(Users.isActive, Users.deletedAt) }.singleOrNull()
         if (trimmed.contains("@")) {
             val email = trimmed.lowercase()
-            return Users.select { Users.email eq email }.singleOrNull()
+            return aliveUser(Users.email eq email)
                 ?: runCatching { trimmed.normalizedEmail() }.getOrNull()?.let { normalized ->
-                    Users.select { Users.email eq normalized }.singleOrNull()
+                    aliveUser(Users.email eq normalized)
                 }
         }
         val handle = trimmed.lowercase()
         if (handle.isEmpty()) return null
-        Users.select { Users.username eq handle }.singleOrNull()?.let { return it }
+        aliveUser(Users.username eq handle)?.let { return it }
         // Fallback: một số bản ghi cũ lưu username khác hoa/thường
-        return Users.selectAll().firstOrNull { row ->
+        return Users.select { usable(Users.isActive, Users.deletedAt) }.firstOrNull { row ->
             row[Users.username]?.equals(handle, ignoreCase = true) == true
         }
     }
@@ -535,21 +538,27 @@ private object Repository {
 
     fun memberRole(userId: String, workspaceId: String): String? = db {
         Memberships.select {
-            (Memberships.userId eq userId) and (Memberships.workspaceId eq workspaceId)
+            (Memberships.userId eq userId) and
+                (Memberships.workspaceId eq workspaceId) and
+                usable(Memberships.isActive, Memberships.deletedAt)
         }.singleOrNull()?.get(Memberships.role)
     }
 
     fun myWorkspaces(userId: String): List<WorkspaceDto> = db {
-        Memberships.select { Memberships.userId eq userId }.mapNotNull { row ->
-            val company = Companies.select { Companies.id eq row[Memberships.workspaceId] }.singleOrNull()
-                ?: return@mapNotNull null
+        Memberships.select {
+            (Memberships.userId eq userId) and usable(Memberships.isActive, Memberships.deletedAt)
+        }.mapNotNull { row ->
+            val company = Companies.select {
+                (Companies.id eq row[Memberships.workspaceId]) and
+                    usable(Companies.isActive, Companies.deletedAt)
+            }.singleOrNull() ?: return@mapNotNull null
             workspaceDto(company, row[Memberships.role])
         }.sortedBy { it.name.lowercase() }
     }
 
     fun createWorkspace(userId: String, request: WorkspaceCreate): WorkspaceDto = db {
         val companyName = request.name.trimmed("Tên workspace", 120)
-        val workspaceId = UUID.randomUUID().toString()
+        val workspaceId = nextId()
         val now = System.currentTimeMillis()
         val code = inviteCode()
         Companies.insert {
@@ -557,21 +566,24 @@ private object Repository {
             it[name] = companyName
             it[inviteCode] = code
             it[createdAt] = now
+            it[updatedAt] = now
         }
         Channels.insert {
-            it[id] = UUID.randomUUID().toString()
+            it[id] = nextId()
             it[companyId] = workspaceId
             it[Channels.name] = "Chung"
             it[isPrivate] = false
             it[createdAt] = now
+            it[updatedAt] = now
         }
         seedWorkspaceWork(workspaceId)
         Memberships.insert {
-            it[id] = UUID.randomUUID().toString()
+            it[id] = nextId()
             it[Memberships.userId] = userId
             it[Memberships.workspaceId] = workspaceId
             it[role] = "ADMIN"
             it[createdAt] = now
+            it[updatedAt] = now
         }
         val company = Companies.select { Companies.id eq workspaceId }.single()
         workspaceDto(company, "ADMIN")
@@ -580,19 +592,25 @@ private object Repository {
     fun joinWorkspace(userId: String, request: JoinWorkspace): WorkspaceDto = db {
         val code = request.inviteCode.trim().uppercase()
         if (code.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Hãy nhập mã mời")
-        val company = Companies.select { Companies.inviteCode eq code }.singleOrNull()
+        val company = Companies.select {
+            (Companies.inviteCode eq code) and usable(Companies.isActive, Companies.deletedAt)
+        }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Mã mời không đúng")
         val workspaceId = company[Companies.id]
         val existing = Memberships.select {
-            (Memberships.userId eq userId) and (Memberships.workspaceId eq workspaceId)
+            (Memberships.userId eq userId) and
+                (Memberships.workspaceId eq workspaceId) and
+                usable(Memberships.isActive, Memberships.deletedAt)
         }.singleOrNull()
         if (existing != null) return@db workspaceDto(company, existing[Memberships.role])
+        val now = System.currentTimeMillis()
         Memberships.insert {
-            it[id] = UUID.randomUUID().toString()
+            it[id] = nextId()
             it[Memberships.userId] = userId
             it[Memberships.workspaceId] = workspaceId
             it[role] = "MEMBER"
-            it[createdAt] = System.currentTimeMillis()
+            it[createdAt] = now
+            it[updatedAt] = now
         }
         workspaceDto(company, "MEMBER")
     }
@@ -601,6 +619,7 @@ private object Repository {
         val companyName = request.name.trimmed("Tên workspace", 120)
         val updated = Companies.update({ Companies.id eq workspaceId }) {
             it[name] = companyName
+            it[updatedAt] = System.currentTimeMillis()
         }
         if (updated == 0) throw AppException(HttpStatusCode.NotFound, "Không tìm thấy workspace")
         val company = Companies.select { Companies.id eq workspaceId }.single()
@@ -641,7 +660,7 @@ private object Repository {
 
     fun createSpace(companyId: String, userId: String, request: SpaceWrite): com.workhub.shared.SpaceNode = db {
         val spaceName = request.name.trimmed("Tên khu vực", 120)
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Spaces.insert {
             it[Spaces.id] = id
             it[Spaces.companyId] = companyId
@@ -666,7 +685,7 @@ private object Repository {
     fun createFolder(companyId: String, userId: String, role: String, request: FolderWrite): com.workhub.shared.FolderNode = db {
         val space = requireVisibleSpace(companyId, userId, role, request.spaceId)
         val folderName = request.name.trimmed("Tên thư mục", 120)
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Folders.insert {
             it[Folders.id] = id
             it[Folders.companyId] = companyId
@@ -688,7 +707,7 @@ private object Repository {
             }
         }
         val listName = request.name.trimmed("Tên danh sách", 120)
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         WorkLists.insert {
             it[WorkLists.id] = id
             it[WorkLists.companyId] = companyId
@@ -704,7 +723,9 @@ private object Repository {
         val visible = visibleListIds(companyId, userId, role)
         val names = memberNames(companyId)
         val lists = listNames(companyId)
-        val rows = Tasks.select { Tasks.companyId eq companyId }
+        val rows = Tasks.select {
+            (Tasks.companyId eq companyId) and usable(Tasks.isActive, Tasks.deletedAt)
+        }
             .orderBy(Tasks.updatedAt to org.jetbrains.exposed.sql.SortOrder.DESC)
             .map { it.toTask(names, lists) }
             .filter { it.listId == null || it.listId in visible }
@@ -786,19 +807,28 @@ private object Repository {
     fun deleteTask(companyId: String, userId: String, role: String, taskId: String) = db {
         val existing = requireTask(companyId, userId, role, taskId)
         ensureCanEditTask(existing, userId)
-        val childIds = Tasks.select { Tasks.parentId eq existing[Tasks.id] }.map { it[Tasks.id] }
+        val now = System.currentTimeMillis()
+        val childIds = Tasks.select {
+            (Tasks.parentId eq existing[Tasks.id]) and alive(Tasks.deletedAt)
+        }.map { it[Tasks.id] }
         (childIds + existing[Tasks.id]).forEach { id ->
-            TaskComments.deleteWhere { with(it) { TaskComments.taskId eq id } }
-            TaskAssignees.deleteWhere { with(it) { TaskAssignees.taskId eq id } }
+            TaskComments.update({ TaskComments.taskId eq id }) {
+                it[deletedAt] = now
+                it[isActive] = false
+                it[updatedAt] = now
+            }
+            Tasks.update({ Tasks.id eq id }) {
+                it[deletedAt] = now
+                it[isActive] = false
+                it[updatedAt] = now
+            }
         }
-        Tasks.deleteWhere { with(it) { Tasks.parentId eq existing[Tasks.id] } }
-        Tasks.deleteWhere { with(it) { Tasks.id eq existing[Tasks.id] } }
     }
 
     fun comments(companyId: String, userId: String, role: String, taskId: String): List<com.workhub.shared.CommentDto> = db {
         requireTask(companyId, userId, role, taskId)
         val names = memberNames(companyId)
-        TaskComments.select { TaskComments.taskId eq taskId }
+        TaskComments.select { (TaskComments.taskId eq taskId) and alive(TaskComments.deletedAt) }
             .orderBy(TaskComments.createdAt to org.jetbrains.exposed.sql.SortOrder.ASC)
             .map { row ->
                 com.workhub.shared.CommentDto(
@@ -817,7 +847,7 @@ private object Repository {
         val body = rawBody.trim()
         if (body.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Bình luận trống")
         if (body.length > 2000) throw AppException(HttpStatusCode.BadRequest, "Bình luận tối đa 2000 ký tự")
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         val now = System.currentTimeMillis()
         TaskComments.insert {
             it[TaskComments.id] = id
@@ -825,6 +855,7 @@ private object Repository {
             it[authorId] = userId
             it[TaskComments.body] = body
             it[createdAt] = now
+            it[updatedAt] = now
         }
         val name = Users.select { Users.id eq userId }.single()[Users.name]
         com.workhub.shared.CommentDto(id, taskId, userId, name, body, now)
@@ -872,14 +903,14 @@ private object Repository {
 
     fun notes(companyId: String): List<NoteDto> = db {
         val names = memberNames(companyId)
-        Notes.select { Notes.companyId eq companyId }
+        Notes.select { (Notes.companyId eq companyId) and usable(Notes.isActive, Notes.deletedAt) }
             .orderBy(Notes.updatedAt to org.jetbrains.exposed.sql.SortOrder.DESC)
             .map { it.toNote(names) }
     }
 
     fun createNote(companyId: String, userId: String, request: NoteWrite): NoteDto = db {
         val now = System.currentTimeMillis()
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Notes.insert {
             it[Notes.id] = id
             it[Notes.companyId] = companyId
@@ -895,7 +926,9 @@ private object Repository {
     }
 
     fun updateNote(companyId: String, userId: String, role: String, noteId: String, request: NoteWrite): NoteDto = db {
-        val existing = Notes.select { (Notes.id eq noteId) and (Notes.companyId eq companyId) }.singleOrNull()
+        val existing = Notes.select {
+            (Notes.id eq noteId) and (Notes.companyId eq companyId) and usable(Notes.isActive, Notes.deletedAt)
+        }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy ghi chú")
         ensureCanChange(role, existing[Notes.authorId], userId)
         Notes.update({ Notes.id eq existing[Notes.id] }) {
@@ -909,15 +942,22 @@ private object Repository {
     }
 
     fun deleteNote(companyId: String, userId: String, role: String, noteId: String) = db {
-        val existing = Notes.select { (Notes.id eq noteId) and (Notes.companyId eq companyId) }.singleOrNull()
+        val existing = Notes.select {
+            (Notes.id eq noteId) and (Notes.companyId eq companyId) and usable(Notes.isActive, Notes.deletedAt)
+        }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy ghi chú")
         ensureCanChange(role, existing[Notes.authorId], userId)
-        Notes.deleteWhere { with(it) { Notes.id eq existing[Notes.id] } }
+        val now = System.currentTimeMillis()
+        Notes.update({ Notes.id eq existing[Notes.id] }) {
+            it[deletedAt] = now
+            it[isActive] = false
+            it[updatedAt] = now
+        }
     }
 
     fun channels(companyId: String, userId: String, role: String): List<ChannelDto> = db {
         ensureGeneralChannel(companyId)
-        Channels.select { Channels.companyId eq companyId }
+        Channels.select { (Channels.companyId eq companyId) and usable(Channels.isActive, Channels.deletedAt) }
             .orderBy(Channels.createdAt to org.jetbrains.exposed.sql.SortOrder.ASC)
             .filter { canSeeChannel(userId, role, it) }
             .map { displayChannel(it, userId) }
@@ -936,7 +976,7 @@ private object Repository {
             addChannelMemberRow(existing[Channels.id], peerId)
             return@db displayChannel(existing, userId)
         }
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Channels.insert {
             it[Channels.id] = id
             it[Channels.companyId] = companyId
@@ -961,7 +1001,7 @@ private object Repository {
         val names = memberNames(companyId)
         val fallback = (listOf(userId) + others).mapNotNull { names[it] }.joinToString(", ").take(80).ifBlank { "Nhóm" }
         val channelName = rawName.trim().ifBlank { fallback }.take(80)
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Channels.insert {
             it[Channels.id] = id
             it[Channels.companyId] = companyId
@@ -977,7 +1017,7 @@ private object Repository {
 
     fun createChannel(companyId: String, userId: String, request: ChannelWrite): ChannelDto = db {
         val channelName = request.name.trimmed("Tên kênh", 80)
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Channels.insert {
             it[Channels.id] = id
             it[Channels.companyId] = companyId
@@ -1038,7 +1078,7 @@ private object Repository {
                     throw AppException(HttpStatusCode.BadRequest, "Chỉ trả lời vào tin nhắn gốc của kênh")
                 }
             }
-            val id = UUID.randomUUID().toString()
+            val id = nextId()
             val now = System.currentTimeMillis()
             Messages.insert {
                 it[Messages.id] = id
@@ -1048,6 +1088,7 @@ private object Repository {
                 it[Messages.body] = body
                 it[locationUrl] = location
                 it[createdAt] = now
+                it[updatedAt] = now
             }
             val senderName = Users.select { Users.id eq userId }.singleOrNull()?.get(Users.name) ?: "Ẩn"
             val preview = body.ifBlank { location.orEmpty() }
@@ -1117,7 +1158,7 @@ private object Repository {
         if (siblings.any { it[Divisions.name].equals(unitName, ignoreCase = true) }) {
             throw AppException(HttpStatusCode.Conflict, "Bộ phận đã tồn tại")
         }
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Divisions.insert {
             it[Divisions.id] = id
             it[Divisions.companyId] = companyId
@@ -1138,7 +1179,7 @@ private object Repository {
         if (siblings.any { it[Departments.name].equals(unitName, ignoreCase = true) }) {
             throw AppException(HttpStatusCode.Conflict, "Phòng đã tồn tại")
         }
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Departments.insert {
             it[Departments.id] = id
             it[companyId] = division[Divisions.companyId]
@@ -1160,7 +1201,7 @@ private object Repository {
         if (siblings.any { it[Teams.name].equals(unitName, ignoreCase = true) }) {
             throw AppException(HttpStatusCode.Conflict, "Nhóm đã tồn tại")
         }
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Teams.insert {
             it[Teams.id] = id
             it[companyId] = department[Departments.companyId]
@@ -1212,10 +1253,13 @@ private object Repository {
 
     private fun addSpaceMemberRow(spaceId: String, userId: String) {
         if (spaceMember(spaceId, userId)) return
+        val now = System.currentTimeMillis()
         SpaceMembers.insert {
-            it[id] = UUID.randomUUID().toString()
+            it[id] = nextId()
             it[SpaceMembers.spaceId] = spaceId
             it[SpaceMembers.userId] = userId
+            it[createdAt] = now
+            it[updatedAt] = now
         }
     }
 
@@ -1239,7 +1283,9 @@ private object Repository {
     }
 
     private fun requireTask(companyId: String, userId: String, role: String, taskId: String): ResultRow {
-        val task = Tasks.select { (Tasks.id eq taskId) and (Tasks.companyId eq companyId) }.singleOrNull()
+        val task = Tasks.select {
+            (Tasks.id eq taskId) and (Tasks.companyId eq companyId) and usable(Tasks.isActive, Tasks.deletedAt)
+        }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy công việc")
         val listId = task[Tasks.listId]
         if (listId != null && listId !in visibleListIds(companyId, userId, role)) {
@@ -1282,7 +1328,7 @@ private object Repository {
         }
         val people = request.cleanAssignees(companyId)
         val now = System.currentTimeMillis()
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         Tasks.insert {
             it[Tasks.id] = id
             it[Tasks.companyId] = companyId
@@ -1310,10 +1356,12 @@ private object Repository {
 
     private fun replaceAssignees(ownerId: String, userIds: List<String>) {
         TaskAssignees.deleteWhere { with(it) { TaskAssignees.taskId eq ownerId } }
+        val now = System.currentTimeMillis()
         userIds.forEach { memberId ->
             TaskAssignees.insert {
                 it[taskId] = ownerId
                 it[userId] = memberId
+                it[createdAt] = now
             }
         }
     }
@@ -1371,7 +1419,7 @@ private object Repository {
         ensureGeneralChannel(companyId)
         val channel = Channels.select { (Channels.companyId eq companyId) and (Channels.name eq "Chung") }.first()
         val senderName = Users.select { Users.id eq userId }.singleOrNull()?.get(Users.name) ?: "Ẩn"
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         val now = System.currentTimeMillis()
         val body = "$senderName đã hoàn thành: $title"
         Messages.insert {
@@ -1465,7 +1513,7 @@ private object Repository {
         body: String,
         channelId: String?,
     ): PendingNotice {
-        val id = UUID.randomUUID().toString()
+        val id = nextId()
         val now = System.currentTimeMillis()
         val safeTitle = title.trim().take(200).ifBlank { "WorkHub" }
         val safeBody = body.trim().take(500)
@@ -1478,6 +1526,7 @@ private object Repository {
             it[Notifications.body] = safeBody
             it[Notifications.channelId] = channelId
             it[createdAt] = now
+            it[updatedAt] = now
             it[seen] = false
         }
         return PendingNotice(userId, NotificationDto(id, noticeKind, safeTitle, safeBody, now, channelId))
@@ -1519,7 +1568,9 @@ private object Repository {
     }
 
     private fun requireVisibleChannel(companyId: String, userId: String, role: String, channelId: String): ResultRow {
-        val channel = Channels.select { Channels.id eq channelId }.singleOrNull()
+        val channel = Channels.select {
+            (Channels.id eq channelId) and usable(Channels.isActive, Channels.deletedAt)
+        }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy kênh chat")
         if (channel[Channels.companyId] != companyId || !canSeeChannel(userId, role, channel)) {
             throw AppException(HttpStatusCode.NotFound, "Không tìm thấy kênh chat")
@@ -1529,13 +1580,18 @@ private object Repository {
 
     private fun addChannelMemberRow(channelId: String, userId: String) {
         val exists = ChannelMembers.select {
-            (ChannelMembers.channelId eq channelId) and (ChannelMembers.userId eq userId)
+            (ChannelMembers.channelId eq channelId) and
+                (ChannelMembers.userId eq userId) and
+                alive(ChannelMembers.deletedAt)
         }.any()
         if (exists) return
+        val now = System.currentTimeMillis()
         ChannelMembers.insert {
-            it[id] = UUID.randomUUID().toString()
+            it[id] = nextId()
             it[ChannelMembers.channelId] = channelId
             it[ChannelMembers.userId] = userId
+            it[createdAt] = now
+            it[updatedAt] = now
         }
     }
 
