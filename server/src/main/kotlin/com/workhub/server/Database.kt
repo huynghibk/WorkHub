@@ -198,8 +198,8 @@ private fun ensureIdCounter() {
 
 object Memberships : Table("memberships") {
     val id = varchar("id", ID_LEN)
-    val userId = varchar("user_id", ID_LEN)
-    val workspaceId = varchar("workspace_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN).index()
+    val workspaceId = varchar("workspace_id", ID_LEN).index()
     val role = varchar("member_role", 20)
     val divisionId = varchar("division_id", ID_LEN).nullable()
     val departmentId = varchar("department_id", ID_LEN).nullable()
@@ -211,33 +211,27 @@ object Memberships : Table("memberships") {
     override val primaryKey = PrimaryKey(id)
 
     init {
-        uniqueIndex("uq_memberships_user_workspace", userId, workspaceId)
-        index("idx_memberships_workspace_id", false, workspaceId)
-        index("idx_memberships_user_id", false, userId)
+        uniqueIndex(userId, workspaceId)
     }
 }
 
 object Companies : Table("companies") {
     val id = varchar("id", ID_LEN)
     val name = varchar("name", 120)
-    val inviteCode = varchar("invite_code", 12)
+    val inviteCode = varchar("invite_code", 12).uniqueIndex()
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        uniqueIndex("uq_companies_invite_code", inviteCode)
-    }
 }
 
 object Users : Table("users") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
     val name = varchar("name", 80)
-    val username = varchar("username", 30).nullable()
-    val email = varchar("email", 160)
+    val username = varchar("username", 30).nullable().uniqueIndex()
+    val email = varchar("email", 160).uniqueIndex()
     val passwordHash = varchar("password_hash", 100)
     val role = varchar("user_role", 20).default("MEMBER")
     val divisionId = varchar("division_id", ID_LEN).nullable()
@@ -253,84 +247,60 @@ object Users : Table("users") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        uniqueIndex("uq_users_email", email)
-        uniqueIndex("uq_users_username", username)
-        index("idx_users_company_id", false, companyId)
-    }
 }
 
 object Divisions : Table("divisions") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
     val name = varchar("name", 120)
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_divisions_company_id", false, companyId)
-    }
 }
 
 object Departments : Table("departments") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
-    val divisionId = varchar("division_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val divisionId = varchar("division_id", ID_LEN).index()
     val name = varchar("name", 120)
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_departments_company_id", false, companyId)
-        index("idx_departments_division_id", false, divisionId)
-    }
 }
 
 /** Junction: hard-replace on assignee sync; still tracks created_at. */
 object TaskAssignees : Table("task_assignees") {
-    val taskId = varchar("task_id", ID_LEN)
-    val userId = varchar("user_id", ID_LEN)
+    val taskId = varchar("task_id", ID_LEN).index()
+    val userId = varchar("user_id", ID_LEN).index()
     val createdAt = long("created_at").default(0L)
     override val primaryKey = PrimaryKey(taskId, userId)
-
-    init {
-        index("idx_task_assignees_user_id", false, userId)
-    }
 }
 
 object Teams : Table("teams") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
-    val departmentId = varchar("department_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val departmentId = varchar("department_id", ID_LEN).index()
     val name = varchar("name", 120)
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_teams_company_id", false, companyId)
-        index("idx_teams_department_id", false, departmentId)
-    }
 }
 
 object Tasks : Table("tasks") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
     val listId = varchar("list_id", ID_LEN).nullable()
     val parentId = varchar("parent_id", ID_LEN).nullable()
     val title = varchar("title", 200)
     val description = varchar("description", 4000)
     /** Business workflow status (TODO / DONE / …), not soft-delete. */
-    val status = varchar("status", 20)
+    val status = varchar("status", 20).index()
     val priority = varchar("priority", 20).nullable().default("NORMAL")
     val assigneeId = varchar("assignee_id", ID_LEN).nullable()
     val creatorId = varchar("creator_id", ID_LEN)
@@ -342,20 +312,12 @@ object Tasks : Table("tasks") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_tasks_company_id", false, companyId)
-        index("idx_tasks_list_id", false, listId)
-        index("idx_tasks_parent_id", false, parentId)
-        index("idx_tasks_assignee_id", false, assigneeId)
-        index("idx_tasks_status", false, status)
-    }
 }
 
 object Notes : Table("notes") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
-    val authorId = varchar("author_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val authorId = varchar("author_id", ID_LEN).index()
     val title = varchar("title", 200)
     val body = varchar("body", 8000)
     val dueAt = long("due_at").nullable()
@@ -365,16 +327,11 @@ object Notes : Table("notes") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_notes_company_id", false, companyId)
-        index("idx_notes_author_id", false, authorId)
-    }
 }
 
 object Channels : Table("channels") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
     val name = varchar("name", 80)
     val isPrivate = bool("is_private").default(false)
     val kind = varchar("kind", 16).nullable().default("CHANNEL")
@@ -383,15 +340,11 @@ object Channels : Table("channels") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_channels_company_id", false, companyId)
-    }
 }
 
 object Notifications : Table("notifications") {
     val id = varchar("id", ID_LEN)
-    val userId = varchar("user_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN).index()
     val workspaceId = varchar("workspace_id", ID_LEN)
     val kind = varchar("kind", 32)
     val title = varchar("title", 200)
@@ -403,17 +356,12 @@ object Notifications : Table("notifications") {
     val deletedAt = sysDeletedAt()
     val seen = bool("is_read").default(false)
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_notifications_user_id", false, userId)
-        index("idx_notifications_workspace_id", false, workspaceId)
-    }
 }
 
 object ChannelMembers : Table("channel_members") {
     val id = varchar("id", ID_LEN)
-    val channelId = varchar("channel_id", ID_LEN)
-    val userId = varchar("user_id", ID_LEN)
+    val channelId = varchar("channel_id", ID_LEN).index()
+    val userId = varchar("user_id", ID_LEN).index()
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
@@ -421,17 +369,15 @@ object ChannelMembers : Table("channel_members") {
     override val primaryKey = PrimaryKey(id)
 
     init {
-        uniqueIndex("uq_channel_members_channel_user", channelId, userId)
-        index("idx_channel_members_channel_id", false, channelId)
-        index("idx_channel_members_user_id", false, userId)
+        uniqueIndex(channelId, userId)
     }
 }
 
 object Messages : Table("messages") {
     val id = varchar("id", ID_LEN)
-    val channelId = varchar("channel_id", ID_LEN)
+    val channelId = varchar("channel_id", ID_LEN).index()
     val parentId = varchar("parent_id", ID_LEN).nullable()
-    val senderId = varchar("sender_id", ID_LEN)
+    val senderId = varchar("sender_id", ID_LEN).index()
     val body = varchar("body", 2000)
     val locationUrl = varchar("location_url", URL_LEN).nullable()
     val createdAt = sysCreatedAt()
@@ -439,17 +385,11 @@ object Messages : Table("messages") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_messages_channel_id", false, channelId)
-        index("idx_messages_parent_id", false, parentId)
-        index("idx_messages_sender_id", false, senderId)
-    }
 }
 
 object Spaces : Table("spaces") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
     val name = varchar("name", 120)
     val isPrivate = bool("is_private").default(false)
     val createdAt = sysCreatedAt()
@@ -457,16 +397,12 @@ object Spaces : Table("spaces") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_spaces_company_id", false, companyId)
-    }
 }
 
 object SpaceMembers : Table("space_members") {
     val id = varchar("id", ID_LEN)
-    val spaceId = varchar("space_id", ID_LEN)
-    val userId = varchar("user_id", ID_LEN)
+    val spaceId = varchar("space_id", ID_LEN).index()
+    val userId = varchar("user_id", ID_LEN).index()
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
@@ -474,33 +410,26 @@ object SpaceMembers : Table("space_members") {
     override val primaryKey = PrimaryKey(id)
 
     init {
-        uniqueIndex("uq_space_members_space_user", spaceId, userId)
-        index("idx_space_members_space_id", false, spaceId)
-        index("idx_space_members_user_id", false, userId)
+        uniqueIndex(spaceId, userId)
     }
 }
 
 object Folders : Table("folders") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
-    val spaceId = varchar("space_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val spaceId = varchar("space_id", ID_LEN).index()
     val name = varchar("name", 120)
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_folders_company_id", false, companyId)
-        index("idx_folders_space_id", false, spaceId)
-    }
 }
 
 object WorkLists : Table("work_lists") {
     val id = varchar("id", ID_LEN)
-    val companyId = varchar("company_id", ID_LEN)
-    val spaceId = varchar("space_id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val spaceId = varchar("space_id", ID_LEN).index()
     val folderId = varchar("folder_id", ID_LEN).nullable()
     val name = varchar("name", 120)
     val createdAt = sysCreatedAt()
@@ -508,29 +437,18 @@ object WorkLists : Table("work_lists") {
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_work_lists_company_id", false, companyId)
-        index("idx_work_lists_space_id", false, spaceId)
-        index("idx_work_lists_folder_id", false, folderId)
-    }
 }
 
 object TaskComments : Table("task_comments") {
     val id = varchar("id", ID_LEN)
-    val taskId = varchar("task_id", ID_LEN)
-    val authorId = varchar("author_id", ID_LEN)
+    val taskId = varchar("task_id", ID_LEN).index()
+    val authorId = varchar("author_id", ID_LEN).index()
     val body = varchar("body", 2000)
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()
     val deletedAt = sysDeletedAt()
     override val primaryKey = PrimaryKey(id)
-
-    init {
-        index("idx_task_comments_task_id", false, taskId)
-        index("idx_task_comments_author_id", false, authorId)
-    }
 }
 
 /** Copy created_at → updated_at for rows that still have default 0 after schema upgrade. */
