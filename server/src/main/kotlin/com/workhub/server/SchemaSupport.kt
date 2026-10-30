@@ -2,12 +2,10 @@ package com.workhub.server
 
 import org.jetbrains.exposed.sql.Column
 import org.jetbrains.exposed.sql.Op
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
+import org.jetbrains.exposed.sql.SqlExpressionBuilder
 import org.jetbrains.exposed.sql.Table
-import org.jetbrains.exposed.sql.and
 
-/** Max length for shared sequential string IDs ("1", "2", …). */
+/** Max length for shared sequential string IDs ("1", "2", ...). */
 const val ID_LEN = 50
 
 /** Compact URL / path storage (prefer object storage + URL over BLOB/TEXT). */
@@ -25,8 +23,9 @@ fun Table.sysIsActive() = bool("is_active").default(true)
 fun Table.sysDeletedAt() = long("deleted_at").nullable()
 
 /** Predicate: row is not soft-deleted. */
-fun alive(deletedAt: Column<Long?>): Op<Boolean> = deletedAt.isNull()
+fun alive(deletedAt: Column<Long?>): Op<Boolean> =
+    with(SqlExpressionBuilder) { deletedAt.isNull() }
 
 /** Predicate: active and not deleted. */
 fun usable(isActive: Column<Boolean>, deletedAt: Column<Long?>): Op<Boolean> =
-    (isActive eq true) and alive(deletedAt)
+    with(SqlExpressionBuilder) { (isActive eq true) and deletedAt.isNull() }
