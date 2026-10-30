@@ -116,6 +116,7 @@ class AppGraph(context: Context) {
     val session = SessionStore(context, BuildConfig.DEFAULT_BASE_URL)
     val api = WorkHubApi(session)
     val realtime = RealtimeHub(api)
+    val keepAlive = ServerKeepAlive(api)
     val userPrefs = UserPrefs(context)
     /** Link Maps được chọn trong app để gắn vào chat / task / note. */
     val attachLink = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)

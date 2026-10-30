@@ -12,6 +12,7 @@
     <string name="chat_show_chrome">显示导航栏</string>
     <string name="chat_hide_chrome">隐藏导航栏</string>
     <string name="chat_open_sidebar">打开会话列表</string>
+    <string name="chat_close_sidebar">收起会话列表</string>
     <string name="tab_org">组织</string>
     <string name="tab_apps">应用</string>
     <string name="apps_title">应用</string>
@@ -84,7 +85,7 @@
     <string name="settings_language">语言</string>
     <string name="settings_invite_users">邀请用户</string>
     <string name="settings_manage_users">管理用户</string>
-    <string name="settings_edit_workspace">编辑工作区信息</string>
+    <string name="settings_edit_workspace">编辑工作区名称</string>
     <string name="settings_profile_local_hint">显示名称和用户名会保存到账户。邮箱无法在此修改。</string>
     <string name="settings_change_avatar">更换头像</string>
     <string name="settings_pick_gallery">从相册选择</string>
@@ -237,7 +238,7 @@
     <string name="login_subtitle">团队一起完成工作的地方。</string>
     <string name="login_field">邮箱或用户名</string>
     <string name="server_url">服务器地址</string>
-    <string name="server_url_hint">例如 https://workhub-o0my.onrender.com</string>
+    <string name="server_url_hint">例如 https://workhub-c0my.onrender.com</string>
     <string name="server_settings">服务器</string>
     <string name="server_preset_cloud">云端 (Render)</string>
     <string name="server_preset_emulator">模拟器 (本机)</string>

@@ -12,6 +12,7 @@
     <string name="chat_show_chrome">Show navigation bars</string>
     <string name="chat_hide_chrome">Hide navigation bars</string>
     <string name="chat_open_sidebar">Open conversations</string>
+    <string name="chat_close_sidebar">Close conversations</string>
     <string name="tab_org">Organization</string>
     <string name="tab_apps">Apps</string>
     <string name="apps_title">Apps</string>
@@ -84,7 +85,7 @@
     <string name="settings_language">Language</string>
     <string name="settings_invite_users">Invite users</string>
     <string name="settings_manage_users">Manage users</string>
-    <string name="settings_edit_workspace">Edit workspace info</string>
+    <string name="settings_edit_workspace">Edit workspace name</string>
     <string name="settings_profile_local_hint">Display name and username are saved to your account. Email cannot be changed here.</string>
     <string name="settings_change_avatar">Change avatar</string>
     <string name="settings_pick_gallery">Choose from gallery</string>
@@ -237,7 +238,7 @@
     <string name="login_subtitle">Where your team gets work done.</string>
     <string name="login_field">Email or username</string>
     <string name="server_url">Server URL</string>
-    <string name="server_url_hint">e.g. https://workhub-o0my.onrender.com</string>
+    <string name="server_url_hint">e.g. https://workhub-c0my.onrender.com</string>
     <string name="server_settings">Server</string>
     <string name="server_preset_cloud">Cloud (Render)</string>
     <string name="server_preset_emulator">Emulator (local)</string>

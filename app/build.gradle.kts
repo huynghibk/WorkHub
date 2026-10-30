@@ -14,9 +14,9 @@ android {
         versionCode = 1
         versionName = "1.0"
         // APK / máy thật mặc định gọi Render. Dev đổi qua nút góc màn hình đăng nhập.
-        buildConfigField("String", "DEFAULT_BASE_URL", "\"https://workhub-o0my.onrender.com\"")
+        buildConfigField("String", "DEFAULT_BASE_URL", "\"https://workhub-c0my.onrender.com\"")
         buildConfigField("String", "EMULATOR_BASE_URL", "\"http://10.0.2.2:8080\"")
-        buildConfigField("String", "CLOUD_BASE_URL", "\"https://workhub-o0my.onrender.com\"")
+        buildConfigField("String", "CLOUD_BASE_URL", "\"https://workhub-c0my.onrender.com\"")
     }
 
     buildTypes {

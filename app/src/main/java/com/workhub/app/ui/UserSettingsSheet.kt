@@ -209,7 +209,15 @@ fun UserSettingsSheet(
                         .padding(horizontal = 4.dp, vertical = 4.dp),
                 ) {
                     if (page != "root") {
-                        TextButton(onClick = { page = "root" }, modifier = Modifier.align(Alignment.CenterStart)) {
+                        TextButton(
+                            onClick = {
+                                page = when (page) {
+                                    "rename_workspace" -> "settings"
+                                    else -> "root"
+                                }
+                            },
+                            modifier = Modifier.align(Alignment.CenterStart),
+                        ) {
                             Text(stringResource(R.string.back))
                         }
                     }
@@ -218,6 +226,7 @@ fun UserSettingsSheet(
                             "notifications" -> stringResource(R.string.settings_customize_notifications)
                             "settings" -> stringResource(R.string.settings)
                             "profile" -> stringResource(R.string.settings_edit_profile)
+                            "rename_workspace" -> stringResource(R.string.settings_edit_workspace)
                             else -> ""
                         },
                         style = MaterialTheme.typography.titleMedium,
@@ -253,6 +262,11 @@ fun UserSettingsSheet(
                             onDismiss()
                             onOpenOrg()
                         },
+                        onEditWorkspace = { page = "rename_workspace" },
+                    )
+                    "rename_workspace" -> RenameWorkspacePage(
+                        initialName = workspace?.name.orEmpty(),
+                        onSaved = { page = "settings" },
                     )
                     "profile" -> EditProfilePage(
                         name = nameDraft,
@@ -553,6 +567,7 @@ private fun GeneralSettingsPage(
     isAdmin: Boolean,
     onInvite: () -> Unit,
     onManageUsers: () -> Unit,
+    onEditWorkspace: () -> Unit,
 ) {
     val language = Locale.getDefault().displayLanguage
     Column(
@@ -591,9 +606,59 @@ private fun GeneralSettingsPage(
                 HorizontalDivider(color = Color(0xFFF3F4F6))
                 SettingsNavRow(Icons.Filled.Groups, stringResource(R.string.settings_manage_users), onClick = onManageUsers)
             }
-            HorizontalDivider(color = Color(0xFFF3F4F6))
-            SettingsNavRow(Icons.Filled.GroupAdd, stringResource(R.string.settings_edit_workspace), onClick = {})
+            if (isAdmin) {
+                HorizontalDivider(color = Color(0xFFF3F4F6))
+                SettingsNavRow(Icons.Filled.GroupAdd, stringResource(R.string.settings_edit_workspace), onClick = onEditWorkspace)
+            }
         }
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+@Composable
+private fun RenameWorkspacePage(
+    initialName: String,
+    onSaved: () -> Unit,
+) {
+    val graph = LocalAppGraph.current
+    val scope = rememberCoroutineScope()
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        SoftField(
+            value = name,
+            onValue = { name = it },
+            label = stringResource(R.string.workspace_name_label),
+        )
+        error?.let { Text(it, color = Danger) }
+        SoftPrimaryButton(
+            text = stringResource(R.string.save),
+            onClick = {
+                scope.launch {
+                    busy = true
+                    error = null
+                    try {
+                        val renamed = withContext(Dispatchers.IO) {
+                            graph.api.renameWorkspace(name.trim())
+                        }
+                        graph.session.openWorkspace(renamed)
+                        onSaved()
+                    } catch (e: Exception) {
+                        error = e.userMessage()
+                    } finally {
+                        busy = false
+                    }
+                }
+            },
+            enabled = name.isNotBlank() && !busy && name.trim() != initialName,
+        )
         Spacer(Modifier.height(32.dp))
     }
 }

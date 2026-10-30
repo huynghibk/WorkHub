@@ -129,6 +129,7 @@ private val BarAction = 48.dp
 internal fun WorkspaceBar(
     onOpenSettings: () -> Unit = {},
     onInvite: () -> Unit = {},
+    onSwitchWorkspace: () -> Unit = {},
 ) {
     val graph = LocalAppGraph.current
     val session by graph.session.state.collectAsState(initial = null)
@@ -152,7 +153,7 @@ internal fun WorkspaceBar(
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.White)
                     .border(1.dp, Line, RoundedCornerShape(16.dp))
-                    .clickable { scope.launch { graph.session.clearWorkspace() } }
+                    .clickable(onClick = onSwitchWorkspace)
                     .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -327,6 +328,26 @@ fun WorkHubNav() {
     val graph = LocalAppGraph.current
     val session by graph.session.state.collectAsState(initial = null)
     val current = session
+    // Silence ping every 5' while logged in so Render free does not sleep.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val loggedIn = !current?.token.isNullOrBlank()
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner, loggedIn) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> if (loggedIn) graph.keepAlive.start()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> graph.keepAlive.stop()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (loggedIn && lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            graph.keepAlive.start()
+        }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            graph.keepAlive.stop()
+        }
+    }
     if (current == null) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {}
         return
@@ -356,7 +377,29 @@ private fun MainNav() {
     var appsOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var inviteOpen by remember { mutableStateOf(false) }
+    var switcherOpen by remember { mutableStateOf(false) }
     var previousRoute by remember { mutableStateOf<String?>(null) }
+    // Re-validate membership after Render cold start / DB wipe; refresh name/role.
+    LaunchedEffect(session?.workspace?.id, session?.token) {
+        val ws = session?.workspace ?: return@LaunchedEffect
+        val token = session?.token ?: return@LaunchedEffect
+        if (token.isBlank()) return@LaunchedEffect
+        try {
+            val list = graph.api.workspaces()
+            val match = list.firstOrNull { it.id == ws.id }
+            if (match == null) {
+                graph.session.clearWorkspace()
+            } else if (
+                match.name != ws.name ||
+                match.role != ws.role ||
+                match.inviteCode != ws.inviteCode
+            ) {
+                graph.session.openWorkspace(match)
+            }
+        } catch (_: Exception) {
+            // Keep current selection; keep-alive / next request will retry.
+        }
+    }
     val go: (String) -> Unit = { target ->
         if (target != route) previousRoute = route
         nav.navigate(target) {
@@ -416,6 +459,7 @@ private fun MainNav() {
                 WorkspaceBar(
                     onOpenSettings = { settingsOpen = true },
                     onInvite = { inviteOpen = true },
+                    onSwitchWorkspace = { switcherOpen = true },
                 )
             }
         },
@@ -502,6 +546,9 @@ private fun MainNav() {
             canInvite = workspace?.role == "ADMIN" && !workspace?.inviteCode.isNullOrBlank(),
             onDismiss = { inviteOpen = false },
         )
+    }
+    if (switcherOpen) {
+        WorkspaceSwitcherSheet(onDismiss = { switcherOpen = false })
     }
     if (appsOpen) {
         AppsSheet(

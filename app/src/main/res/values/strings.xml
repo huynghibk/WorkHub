@@ -12,6 +12,7 @@
     <string name="chat_show_chrome">Hiện thanh điều hướng</string>
     <string name="chat_hide_chrome">Ẩn thanh điều hướng</string>
     <string name="chat_open_sidebar">Mở danh sách hội thoại</string>
+    <string name="chat_close_sidebar">Thu danh sách hội thoại</string>
     <string name="tab_org">Tổ chức</string>
     <string name="tab_apps">Apps</string>
     <string name="apps_title">Apps</string>
@@ -85,7 +86,7 @@
     <string name="settings_language">Language</string>
     <string name="settings_invite_users">Invite users</string>
     <string name="settings_manage_users">Manage users</string>
-    <string name="settings_edit_workspace">Edit workspace info</string>
+    <string name="settings_edit_workspace">Sửa tên workspace</string>
     <string name="settings_profile_local_hint">Tên hiển thị và username được lưu trên tài khoản. Email không đổi tại đây.</string>
     <string name="settings_change_avatar">Đổi ảnh đại diện</string>
     <string name="settings_pick_gallery">Chọn từ thư viện</string>
@@ -237,7 +238,7 @@
     <string name="login_subtitle">Nơi làm việc của nhóm bạn.</string>
     <string name="login_field">Email hoặc username</string>
     <string name="server_url">Địa chỉ máy chủ</string>
-    <string name="server_url_hint">VD: https://workhub-o0my.onrender.com</string>
+    <string name="server_url_hint">VD: https://workhub-c0my.onrender.com</string>
     <string name="server_settings">Máy chủ</string>
     <string name="server_preset_cloud">Cloud (Render)</string>
     <string name="server_preset_emulator">Emulator (máy dev)</string>

@@ -25,6 +25,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Send
@@ -175,7 +176,8 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
     }
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = false,
+        // Scrim tap + swipe dismiss (was false → sidebar opened but could not close).
+        gesturesEnabled = true,
         drawerContent = {
             ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
                 ChatSidebar(
@@ -185,6 +187,7 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                     others = otherChannels,
                     selectedId = vm.channel?.id,
                     canCreateChannel = canManageContent(session?.workspace?.role),
+                    onClose = { scope.launch { drawerState.close() } },
                     onSelect = ::openChannel,
                     onDirect = {
                         scope.launch { drawerState.close() }
@@ -238,8 +241,19 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                        Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.chat_open_sidebar))
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                if (drawerState.isOpen) drawerState.close() else drawerState.open()
+                            }
+                        },
+                    ) {
+                        Icon(
+                            if (drawerState.isOpen) Icons.Filled.Close else Icons.Filled.Menu,
+                            contentDescription = stringResource(
+                                if (drawerState.isOpen) R.string.chat_close_sidebar else R.string.chat_open_sidebar,
+                            ),
+                        )
                     }
                 },
                 actions = {
@@ -558,6 +572,7 @@ private fun ChatSidebar(
     selectedId: String?,
     canCreateChannel: Boolean,
     showAddMember: Boolean,
+    onClose: () -> Unit,
     onSelect: (ChannelDto) -> Unit,
     onDirect: () -> Unit,
     onGroup: () -> Unit,
@@ -569,12 +584,24 @@ private fun ChatSidebar(
             .fillMaxHeight()
             .padding(vertical = 12.dp),
     ) {
-        Text(
-            stringResource(R.string.tab_chat),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.tab_chat),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+            )
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.chat_close_sidebar))
+            }
+        }
         Row(
             Modifier
                 .fillMaxWidth()

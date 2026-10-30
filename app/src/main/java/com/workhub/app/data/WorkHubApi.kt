@@ -70,7 +70,8 @@ class WorkHubApi(private val session: SessionStore) {
     private val http = HttpClient(OkHttp) {
         engine {
             config {
-                connectTimeout(10, TimeUnit.SECONDS)
+                // Align with HttpTimeout — Render free cold-start is often >10s.
+                connectTimeout(30, TimeUnit.SECONDS)
                 // 0 = no idle read kill (needed for WebSocket); HTTP still bounded by HttpTimeout.
                 readTimeout(0, TimeUnit.MILLISECONDS)
                 writeTimeout(30, TimeUnit.SECONDS)
@@ -81,9 +82,29 @@ class WorkHubApi(private val session: SessionStore) {
         install(ContentNegotiation) { json(json) }
         install(WebSockets)
         install(HttpTimeout) {
-            requestTimeoutMillis = 15_000
-            connectTimeoutMillis = 8_000
+            // Render free cold-start can take 30–60s; keep headroom.
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 30_000
             // Do not set socketTimeout — would kill idle WebSocket frames.
+        }
+    }
+
+    /** Lightweight ping so Render free tier does not sleep after ~15 minutes idle. */
+    suspend fun ping() {
+        try {
+            val current = session.current()
+            val response = http.request(current.baseUrl.trimEnd('/') + "/health") {
+                method = HttpMethod.Get
+            }
+            if (!response.status.isSuccess()) {
+                throw ApiException("Máy chủ chưa sẵn sàng (${response.status.value})")
+            }
+        } catch (error: ApiException) {
+            throw error
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            throw ApiException("Không kết nối được máy chủ. Hãy chắc backend đang chạy.")
         }
     }
 
@@ -123,6 +144,9 @@ class WorkHubApi(private val session: SessionStore) {
 
     suspend fun joinWorkspace(inviteCode: String): WorkspaceDto =
         send(HttpMethod.Post, "/workspaces/join", JoinWorkspace(inviteCode))
+
+    suspend fun renameWorkspace(name: String): WorkspaceDto =
+        send(HttpMethod.Put, "/workspaces/current", WorkspaceCreate(name))
 
     suspend fun orgTree(): OrgTree = send(HttpMethod.Get, "/org/tree")
 
@@ -269,7 +293,14 @@ class WorkHubApi(private val session: SessionStore) {
                     )
                 }
                 val message = runCatching { response.body<ErrorResponse>().error }.getOrNull()
-                throw ApiException(message ?: "Yêu cầu thất bại (${response.status.value})")
+                    ?: "Yêu cầu thất bại (${response.status.value})"
+                // Stale workspace after Render DB wipe / redeploy — drop local selection.
+                if (response.status.value == 403 &&
+                    message.contains("không thuộc workspace", ignoreCase = true)
+                ) {
+                    session.clearWorkspace()
+                }
+                throw ApiException(message)
             }
             if (T::class == Unit::class) {
                 @Suppress("UNCHECKED_CAST")

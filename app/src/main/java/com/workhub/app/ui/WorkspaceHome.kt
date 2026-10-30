@@ -106,8 +106,9 @@ fun WorkspaceHomeScreen() {
     var preferJoin by remember { mutableStateOf(false) }
     val hasWorkspace = vm.workspaces.isNotEmpty()
     LaunchedEffect(Unit) { vm.refresh() }
-    LaunchedEffect(userName, hasWorkspace, vm.loading) {
-        if (!vm.loading && !hasWorkspace && step == HomeStep.Picker) {
+    // Only auto-open create when the user truly has no workspaces (not on network errors).
+    LaunchedEffect(userName, hasWorkspace, vm.loading, vm.error) {
+        if (!vm.loading && !hasWorkspace && vm.error == null && step == HomeStep.Picker) {
             step = HomeStep.Create
             if (name.isBlank()) name = context.getString(R.string.default_workspace_name, userName)
         }

@@ -172,6 +172,10 @@ fun Application.module() {
             post("/workspaces/join") {
                 call.respond(Repository.joinWorkspace(call.userId(), call.receive()))
             }
+            put("/workspaces/current") {
+                call.requireWorkspaceAdmin()
+                call.respond(Repository.renameWorkspace(call.companyId(), call.receive()))
+            }
             get("/org/tree") { call.respond(Repository.orgTree(call.companyId())) }
             route("/admin") {
                 post("/divisions") {
@@ -583,6 +587,16 @@ private object Repository {
             it[createdAt] = System.currentTimeMillis()
         }
         workspaceDto(company, "MEMBER")
+    }
+
+    fun renameWorkspace(workspaceId: String, request: WorkspaceCreate): WorkspaceDto = db {
+        val companyName = request.name.trimmed("Tên workspace", 120)
+        val updated = Companies.update({ Companies.id eq workspaceId }) {
+            it[name] = companyName
+        }
+        if (updated == 0) throw AppException(HttpStatusCode.NotFound, "Không tìm thấy workspace")
+        val company = Companies.select { Companies.id eq workspaceId }.single()
+        workspaceDto(company, "ADMIN")
     }
 
     fun setMemberRole(workspaceId: String, targetUserId: String, newRole: String) = db {

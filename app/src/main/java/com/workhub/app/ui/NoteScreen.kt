@@ -133,7 +133,15 @@ fun NoteScreen() {
         NoteEditor(
             initial = editor,
             canSave = editor == null || canManageContent(session?.workspace?.role) || editor?.authorId == session?.user?.id,
-            onDismiss = { creating = false; editor = null },
+            saving = vm.saving,
+            saveError = vm.saveError,
+            onDismiss = {
+                if (!vm.saving) {
+                    creating = false
+                    editor = null
+                    vm.clearSaveError()
+                }
+            },
             onSave = { write ->
                 vm.save(editor, write) {
                     creating = false
@@ -155,6 +163,8 @@ fun NoteScreen() {
 private fun NoteEditor(
     initial: NoteDto?,
     canSave: Boolean,
+    saving: Boolean,
+    saveError: String?,
     onDismiss: () -> Unit,
     onSave: (NoteWrite) -> Unit,
     onDelete: (() -> Unit)?,
@@ -174,24 +184,26 @@ private fun NoteEditor(
         },
         onDismiss = onDismiss,
         canSave = canSave,
+        saving = saving,
+        error = saveError ?: formError,
         onSave = {
             if (title.isBlank()) {
                 formError = titleError
                 return@EditorDialog
             }
+            formError = null
             onSave(NoteWrite(title.trim(), body.trim(), dueAt))
         },
         onDelete = onDelete,
     ) {
         OutlinedField(title, { title = it }, stringResource(R.string.field_title))
         OutlinedField(body, { body = it }, stringResource(R.string.field_body), singleLine = false)
-        DateField(stringResource(R.string.note_due), dueAt, { dueAt = it }, enabled = canSave)
+        DateField(stringResource(R.string.note_due), dueAt, { dueAt = it }, enabled = canSave && !saving)
         if (canSave) {
             LocationAttachActions { link ->
                 body = if (body.isBlank()) link else "$body\n$link"
             }
         }
-        formError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 }
 
@@ -309,9 +321,17 @@ class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    var saving by mutableStateOf(false)
+        private set
+    var saveError by mutableStateOf<String?>(null)
+        private set
 
     init {
         refresh()
+    }
+
+    fun clearSaveError() {
+        saveError = null
     }
 
     fun refresh() {
@@ -330,24 +350,43 @@ class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
 
     fun save(existing: NoteDto?, write: NoteWrite, onDone: () -> Unit) {
         viewModelScope.launch {
+            saving = true
+            saveError = null
             try {
-                if (existing == null) api.createNote(write) else api.updateNote(existing.id, write)
-                refresh()
+                val saved = if (existing == null) {
+                    api.createNote(write)
+                } else {
+                    api.updateNote(existing.id, write)
+                }
+                // Keep UI in sync even if a follow-up list refresh fails (Render wake race).
+                notes = if (existing == null) {
+                    listOf(saved) + notes.filter { it.id != saved.id }
+                } else {
+                    notes.map { if (it.id == saved.id) saved else it }
+                }
                 onDone()
+                runCatching { notes = api.notes() }
             } catch (e: Exception) {
-                error = e.userMessage()
+                saveError = e.userMessage()
+            } finally {
+                saving = false
             }
         }
     }
 
     fun delete(id: String, onDone: () -> Unit) {
         viewModelScope.launch {
+            saving = true
+            saveError = null
             try {
                 api.deleteNote(id)
-                refresh()
+                notes = notes.filter { it.id != id }
                 onDone()
+                runCatching { notes = api.notes() }
             } catch (e: Exception) {
-                error = e.userMessage()
+                saveError = e.userMessage()
+            } finally {
+                saving = false
             }
         }
     }
