@@ -367,6 +367,17 @@
     <string name="channel_name">Tên kênh</string>
     <string name="keyword">Từ khóa</string>
     <string name="thread_count">Luồng %1$d</string>
+    <string name="chat_mark_unread">Đánh dấu chưa đọc</string>
+    <string name="chat_mark_read">Đánh dấu đã đọc</string>
+    <string name="chat_pin_top">Ghim lên đầu</string>
+    <string name="chat_unpin">Bỏ ghim</string>
+    <string name="chat_mute">Tắt thông báo</string>
+    <string name="chat_unmute">Bật thông báo</string>
+    <string name="chat_select_many">Chọn nhiều</string>
+    <string name="chat_delete_selected">Xóa</string>
+    <string name="chat_delete_conversation">Xóa đoạn hội thoại</string>
+    <string name="chat_leave_group">Rời nhóm</string>
+    <string name="chat_start">Bắt đầu</string>
     <string name="chat_tab_all">Tất cả</string>
     <string name="chat_tab_work">Công việc</string>
     <string name="chat_inbox_work_empty">Chưa có hội thoại nào gắn việc hoặc ghi chú.</string>

@@ -82,8 +82,10 @@ fun NotificationBinder() {
     LaunchedEffect(resumeTick) {
         fun present(note: NotificationDto) {
             if (settings.muteNotifications) return
+            val channelId = note.channelId
+            if (channelId != null && graph.marks.isChannelMuted(channelId)) return
             if (!seen.add(note.id)) return
-            val sameChat = AppVisibility.foreground && note.channelId != null && note.channelId == AppVisibility.channelId
+            val sameChat = AppVisibility.foreground && channelId != null && channelId == AppVisibility.channelId
             if (!sameChat) showWorkHubNotification(context, note)
         }
         try {
@@ -98,8 +100,10 @@ fun NotificationBinder() {
     LaunchedEffect(Unit) {
         fun present(note: NotificationDto) {
             if (settings.muteNotifications) return
+            val channelId = note.channelId
+            if (channelId != null && graph.marks.isChannelMuted(channelId)) return
             if (!seen.add(note.id)) return
-            val sameChat = AppVisibility.foreground && note.channelId != null && note.channelId == AppVisibility.channelId
+            val sameChat = AppVisibility.foreground && channelId != null && channelId == AppVisibility.channelId
             if (!sameChat) showWorkHubNotification(context, note)
         }
         graph.realtime.events.collect { event ->

@@ -81,6 +81,12 @@ interface ChatDao {
     @Query("DELETE FROM channels WHERE workspaceId = :workspaceId")
     suspend fun deleteChannels(workspaceId: String)
 
+    @Query("DELETE FROM channels WHERE id = :id")
+    suspend fun deleteChannel(id: String)
+
+    @Query("DELETE FROM messages WHERE channelId = :channelId")
+    suspend fun deleteChannelMessages(channelId: String)
+
     @Upsert
     suspend fun upsertChannels(rows: List<ChannelEntity>)
 

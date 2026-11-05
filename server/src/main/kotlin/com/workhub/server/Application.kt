@@ -1493,10 +1493,7 @@ private object Repository {
     }
 
     fun leaveChannel(companyId: String, userId: String, role: String, channelId: String) = db {
-        val channel = requireVisibleChannel(companyId, userId, role, channelId)
-        if (channelKind(channel) == "DIRECT") {
-            throw AppException(HttpStatusCode.BadRequest, "Không thể rời tin nhắn riêng")
-        }
+        requireVisibleChannel(companyId, userId, role, channelId)
         ChannelMembers.deleteWhere {
             (ChannelMembers.channelId eq channelId) and (ChannelMembers.userId eq userId)
         }

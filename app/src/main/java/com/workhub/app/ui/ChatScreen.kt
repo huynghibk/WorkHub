@@ -51,6 +51,7 @@ import androidx.compose.material.icons.outlined.Reply
 import androidx.compose.material.icons.outlined.Shortcut
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -58,7 +59,10 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.ViewDay
@@ -170,6 +174,7 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var draft by remember { mutableStateOf("") }
     var quoting by remember { mutableStateOf<MessageDto?>(null) }
+    var conversationMenu by remember { mutableStateOf(false) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         val file = uri?.let { copyOutgoing(context, it) } ?: return@rememberLauncherForActivityResult
         vm.send("", localPath = file.absolutePath, attachmentName = file.name, attachmentKind = "IMAGE", replyTo = quoting)
@@ -298,15 +303,23 @@ fun ChatScreen(
     val onlineIds by vm.onlineIds.collectAsStateWithLifecycle()
     if (vm.channel == null) {
         ChatInbox(
-            channels = allChannels,
+            channels = allChannels.filter { it.id !in graph.marks.hidden() },
             latest = latest,
             myId = myId,
             onlineIds = onlineIds,
             unreadOf = { id ->
                 val since = if (markRevision >= 0) graph.marks.lastRead(id) else 0L
-                peeks.count { it.channelId == id && it.senderId != myId && it.createdAt > since }
+                val count = peeks.count { it.channelId == id && it.senderId != myId && it.createdAt > since }
+                if (count == 0 && graph.marks.isForcedUnread(id)) 1 else count
             },
-            onOpen = vm::open,
+            onOpen = { channel ->
+                graph.marks.unhide(channel.id)
+                vm.open(channel)
+            },
+            onForget = { channel ->
+                graph.marks.hide(channel.id)
+                vm.forgetConversation(channel)
+            },
             onNew = {
                 newChatPicks = emptySet()
                 newChat = true
@@ -364,39 +377,38 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    Row {
-                        IconButton(onClick = { vm.closeConversation() }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.back),
-                            )
-                        }
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Outlined.Menu, contentDescription = stringResource(R.string.chat_channels))
-                        }
+                    IconButton(onClick = {
+                        if (vm.thread != null) vm.closeThread() else vm.closeConversation()
+                    }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = { graph.chatChromeVisible.value = !chromeVisible },
-                    ) {
-                        Icon(
-                            if (chromeVisible) Icons.Filled.ViewDay else Icons.Filled.ViewAgenda,
-                            contentDescription = stringResource(
-                                if (chromeVisible) R.string.chat_hide_chrome else R.string.chat_show_chrome,
-                            ),
+                    IconButton(onClick = { channelSearch = true }) {
+                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
+                    }
+                    IconButton(onClick = { conversationMenu = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.chat_composer_more))
+                    }
+                    DropdownMenu(expanded = conversationMenu, onDismissRequest = { conversationMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.search_workspace)) },
+                            onClick = {
+                                conversationMenu = false
+                                searching = true
+                            },
                         )
-                    }
-                    TextButton(onClick = { channelSearch = true }) { Text(stringResource(R.string.search)) }
-                    TextButton(onClick = { searching = true }) { Text(stringResource(R.string.search_workspace)) }
-                    if (vm.thread != null) {
-                        TextButton(onClick = vm::closeThread) { Text(stringResource(R.string.channel)) }
-                    }
-                    IconButton(onClick = {
-                        newChatPicks = emptySet()
-                        newChat = true
-                    }) {
-                        Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.new_chat))
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.new_chat)) },
+                            onClick = {
+                                conversationMenu = false
+                                newChatPicks = emptySet()
+                                newChat = true
+                            },
+                        )
                     }
                 },
             )
@@ -892,10 +904,16 @@ private fun ChatInbox(
     onlineIds: Set<String>,
     unreadOf: (String) -> Int,
     onOpen: (ChannelDto) -> Unit,
+    onForget: (ChannelDto) -> Unit,
     onNew: () -> Unit,
 ) {
     var filter by remember { mutableStateOf("") }
     var workOnly by remember { mutableStateOf(false) }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    val graph = LocalAppGraph.current
+    val scope = rememberCoroutineScope()
+    val markTick by graph.marks.changes.collectAsStateWithLifecycle()
     val shown = channels
         .filter { filter.isBlank() || it.name.contains(filter, ignoreCase = true) }
         .filter { channel ->
@@ -904,9 +922,42 @@ private fun ChatInbox(
                 last?.taskId != null || last?.noteId != null
             }
         }
-        .sortedByDescending { latest[it.id]?.createdAt ?: 0L }
+        .sortedWith(
+            compareByDescending<ChannelDto> { markTick >= 0 && graph.marks.isChannelPinned(it.id) }
+                .thenByDescending { latest[it.id]?.createdAt ?: 0L },
+        )
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            if (selecting) {
+                Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        TextButton(
+                            onClick = {
+                                selected.forEach { id ->
+                                    val at = latest[id]?.createdAt ?: System.currentTimeMillis()
+                                    graph.marks.markRead(id, at)
+                                }
+                                selected = emptySet()
+                                selecting = false
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text(stringResource(R.string.chat_mark_read)) }
+                        TextButton(
+                            onClick = {
+                                channels.filter { it.id in selected }.forEach(onForget)
+                                selected = emptySet()
+                                selecting = false
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text(stringResource(R.string.chat_delete_selected)) }
+                    }
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.tab_chat)) },
@@ -962,7 +1013,29 @@ private fun ChatInbox(
                             (channel.kind.equals("DIRECT", true) || channel.kind.equals("DM", true)) &&
                                 peer != null && peer in onlineIds
                         },
-                        onClick = { onOpen(channel) },
+                        onClick = {
+                            if (selecting) {
+                                selected = if (channel.id in selected) selected - channel.id else selected + channel.id
+                            } else {
+                                onOpen(channel)
+                            }
+                        },
+                        onForget = { onForget(channel) },
+                        pinned = graph.marks.isChannelPinned(channel.id),
+                        muted = graph.marks.isChannelMuted(channel.id),
+                        checked = channel.id in selected,
+                        selecting = selecting,
+                        onMarkUnread = { graph.marks.markUnread(channel.id) },
+                        onTogglePin = { graph.marks.toggleChannelPin(channel.id) },
+                        onToggleMute = {
+                            val next = !graph.marks.isChannelMuted(channel.id)
+                            graph.marks.setChannelMuted(channel.id, next)
+                            scope.launch { runCatching { graph.api.muteChannel(channel.id, next) } }
+                        },
+                        onSelectMany = {
+                            selecting = true
+                            selected = selected + channel.id
+                        },
                     )
                 }
             }
@@ -970,6 +1043,7 @@ private fun ChatInbox(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun InboxRow(
     channel: ChannelDto,
@@ -978,15 +1052,78 @@ private fun InboxRow(
     unread: Int,
     online: Boolean = false,
     onClick: () -> Unit,
+    onForget: () -> Unit,
+    pinned: Boolean = false,
+    muted: Boolean = false,
+    checked: Boolean = false,
+    selecting: Boolean = false,
+    onMarkUnread: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
+    onToggleMute: () -> Unit = {},
+    onSelectMany: () -> Unit = {},
 ) {
+    val canForget = channel.kind.equals("DIRECT", true) ||
+        channel.kind.equals("DM", true) ||
+        channel.kind.equals("GROUP", true)
+    var menu by remember { mutableStateOf(false) }
+    val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == androidx.compose.material3.SwipeToDismissBoxValue.EndToStart) menu = true
+            false
+        },
+    )
+    Box {
+    androidx.compose.material3.SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = {
+            Box(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(end = 20.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Text(
+                    stringResource(if (channel.kind.equals("GROUP", true)) R.string.chat_leave_group else R.string.chat_delete_conversation),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+        },
+    ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .background(MaterialTheme.colorScheme.background)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { menu = true },
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (selecting) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (checked) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .border(
+                        1.5.dp,
+                        if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        RoundedCornerShape(4.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (checked) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
         Box(contentAlignment = Alignment.BottomEnd) {
         Box(
             modifier = Modifier
@@ -1013,7 +1150,21 @@ private fun InboxRow(
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(channel.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    channel.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (pinned) {
+                    Icon(Icons.Filled.PushPin, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+                if (muted) {
+                    Icon(Icons.Outlined.NotificationsOff, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             Text(
                 last?.let { message ->
                     val body = message.body.replace('\n', ' ').ifBlank { stringResource(R.string.chat_inbox_empty_line) }
@@ -1052,6 +1203,38 @@ private fun InboxRow(
                 }
             }
         }
+    }
+    }
+    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.chat_mark_unread)) },
+            onClick = { menu = false; onMarkUnread() },
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(if (pinned) R.string.chat_unpin else R.string.chat_pin_top)) },
+            onClick = { menu = false; onTogglePin() },
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(if (muted) R.string.chat_unmute else R.string.chat_mute)) },
+            onClick = { menu = false; onToggleMute() },
+        )
+        if (canForget) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        stringResource(
+                            if (channel.kind.equals("GROUP", true)) R.string.chat_leave_group else R.string.chat_delete_conversation,
+                        ),
+                    )
+                },
+                onClick = { menu = false; onForget() },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.chat_select_many)) },
+            onClick = { menu = false; onSelectMany() },
+        )
+    }
     }
 }
 
@@ -1127,6 +1310,12 @@ private fun NewChatDialog(
                             )
                         }
                     }
+                }
+                if (picked.size == 1) {
+                    SoftPrimaryButton(
+                        text = stringResource(R.string.chat_start),
+                        onClick = { onOpen(picked.first()) },
+                    )
                 }
                 if (picked.size >= 2) {
                     OutlinedTextField(
@@ -1917,6 +2106,14 @@ class ChatViewModel(
 
     fun closeConversation() {
         select(null, null)
+    }
+
+    fun forgetConversation(target: ChannelDto) {
+        viewModelScope.launch {
+            runCatching { api.leaveChannel(target.id) }
+            chat.dropConversation(target.id)
+            if (channel?.id == target.id) select(null, null)
+        }
     }
 
     fun open(next: ChannelDto) {

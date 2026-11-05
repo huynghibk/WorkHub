@@ -87,6 +87,11 @@ class ChatStore(
     fun messages(channelId: String, parentId: String?): Flow<List<MessageDto>> =
         db.chat().observeMessages(channelId, parentId).map { rows -> rows.map { decode(it.payload) } }
 
+    suspend fun dropConversation(channelId: String) {
+        db.chat().deleteChannel(channelId)
+        db.chat().deleteChannelMessages(channelId)
+    }
+
     suspend fun refreshChannels(): List<ChannelDto> {
         val ws = session.current().workspace?.id ?: return emptyList()
         val list = api.channels()

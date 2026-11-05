@@ -366,6 +366,17 @@
     <string name="channel_name">Channel name</string>
     <string name="keyword">Keyword</string>
     <string name="thread_count">Thread %1$d</string>
+    <string name="chat_mark_unread">Mark as unread</string>
+    <string name="chat_mark_read">Mark as read</string>
+    <string name="chat_pin_top">Pin to top</string>
+    <string name="chat_unpin">Unpin</string>
+    <string name="chat_mute">Mute</string>
+    <string name="chat_unmute">Unmute</string>
+    <string name="chat_select_many">Select</string>
+    <string name="chat_delete_selected">Delete</string>
+    <string name="chat_delete_conversation">Delete conversation</string>
+    <string name="chat_leave_group">Leave group</string>
+    <string name="chat_start">Start</string>
     <string name="chat_tab_all">All</string>
     <string name="chat_tab_work">Work</string>
     <string name="chat_inbox_work_empty">No conversation is linked to a task or note yet.</string>
