@@ -189,12 +189,14 @@ class OfflineStore(
             }
             "note_delete" -> event.deletedId?.let { db.notes().remove(it) }
             "message" -> event.message?.let { chat.apply(it) }
+            "reaction" -> event.reaction?.let { chat.applyReaction(it) }
         }
     }
 
     suspend fun pendingCount(): Int = db.tasks().pending().size + db.notes().pending().size + chat.pendingCount()
 
-    suspend fun hasPending(): Boolean = pendingCount() > 0
+    suspend fun hasPending(): Boolean =
+        db.tasks().pending().isNotEmpty() || db.notes().pending().isNotEmpty() || chat.sendingCount() > 0
 
     suspend fun clear() = withContext(Dispatchers.IO) { db.clearAllTables() }
 

@@ -359,6 +359,19 @@ fun Application.module() {
                     ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
                 }
+                put("/{id}/messages/{messageId}/react") {
+                    val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
+                    val saved = Repository.setReaction(
+                        call.companyId(),
+                        call.userId(),
+                        call.memberRole(),
+                        call.channelId(),
+                        messageId,
+                        call.receive<com.workhub.shared.ReactionWrite>().emoji,
+                    )
+                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("reaction", reaction = saved)))
+                    call.respond(saved)
+                }
                 post("/{id}/messages/{messageId}/task") {
                     val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
                     try {
@@ -494,6 +507,8 @@ private fun deliverNotices(companyId: String, notices: List<PendingNotice>) {
         ChatHub.publishTo(companyId, pending.userId, payload)
     }
 }
+
+private val ALLOWED_REACTIONS = setOf("❤️", "👍", "😂", "😮", "😢", "😠")
 
 private object Repository {
     fun register(request: RegisterRequest): AuthResponse {
@@ -1201,7 +1216,37 @@ private object Repository {
             locationUrl = row[Messages.locationUrl],
             taskId = row[Messages.taskId],
             noteId = row[Messages.noteId],
+            reactions = reactionsFor(listOf(messageId))[messageId].orEmpty(),
         )
+    }
+
+    fun setReaction(
+        companyId: String,
+        userId: String,
+        role: String,
+        channelId: String,
+        messageId: String,
+        rawEmoji: String,
+    ): com.workhub.shared.ReactionEvent = db {
+        requireVisibleChannel(companyId, userId, role, channelId)
+        val row = Messages.select { Messages.id eq messageId }.singleOrNull()
+            ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy tin nhắn")
+        if (row[Messages.channelId] != channelId) throw AppException(HttpStatusCode.Conflict, "Mã tin nhắn đã được dùng")
+        val emoji = rawEmoji.trim()
+        if (emoji.isNotEmpty() && emoji !in ALLOWED_REACTIONS) {
+            throw AppException(HttpStatusCode.BadRequest, "Biểu cảm không hỗ trợ")
+        }
+        MessageReactions.deleteWhere {
+            with(it) { (MessageReactions.messageId eq messageId) and (MessageReactions.userId eq userId) }
+        }
+        if (emoji.isNotEmpty()) {
+            MessageReactions.insert {
+                it[MessageReactions.messageId] = messageId
+                it[MessageReactions.userId] = userId
+                it[MessageReactions.emoji] = emoji
+            }
+        }
+        com.workhub.shared.ReactionEvent(messageId, channelId, userId, emoji)
     }
 
     fun addMessage(

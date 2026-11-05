@@ -6,8 +6,12 @@ import com.workhub.app.data.local.WorkHubDb
 import com.workhub.shared.ChannelDto
 import com.workhub.shared.MessageDto
 import com.workhub.shared.MessageWrite
+import com.workhub.shared.ReactionDto
+import com.workhub.shared.ReactionEvent
 import java.util.UUID
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +33,7 @@ class ChatStore(
     private val requestSync: () -> Unit,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val pushLock = Mutex()
 
     private val _sendError = MutableStateFlow<String?>(null)
     /** Reason the server gave for the last refused message (the message stays, marked failed). */
@@ -105,7 +110,7 @@ class ChatStore(
         requestSync()
     }
 
-    suspend fun push() {
+    suspend fun push() = pushLock.withLock {
         for (row in db.chat().pending()) {
             val sent = row.pendingWrite ?: continue
             val write = json.decodeFromString(MessageWrite.serializer(), sent)
@@ -123,6 +128,9 @@ class ChatStore(
         }
     }
 
+    /** Still uploading. Refused messages are not counted: retrying them needs a tap. */
+    suspend fun sendingCount(): Int = db.chat().pendingIds().size
+
     suspend fun retry(id: String) {
         _sendError.value = null
         db.chat().retry(id)
@@ -136,6 +144,15 @@ class ChatStore(
 
     /** Messages that would be lost on logout: still sending or refused. */
     suspend fun pendingCount(): Int = db.chat().unsentCount()
+
+    /** One reaction per person. An empty emoji clears it. */
+    suspend fun applyReaction(event: ReactionEvent) {
+        val row = db.chat().get(event.messageId) ?: return
+        val dto = decode(row.payload)
+        val rest = dto.reactions.filter { it.userId != event.userId }
+        val next = if (event.emoji.isBlank()) rest else rest + ReactionDto(event.userId, event.emoji)
+        db.chat().upsert(row.copy(payload = json.encodeToString(MessageDto.serializer(), dto.copy(reactions = next))))
+    }
 
     /** Realtime "message" event: store it unless it is our own upload still in flight. */
     suspend fun apply(message: MessageDto) {

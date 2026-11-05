@@ -307,6 +307,9 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun putMessage(channelId: String, id: String, write: MessageWrite, workspaceId: String): MessageDto =
         send(HttpMethod.Put, "/channels/$channelId/messages/$id", write, workspaceId = workspaceId)
 
+    suspend fun react(channelId: String, messageId: String, emoji: String): com.workhub.shared.ReactionEvent =
+        send(HttpMethod.Put, "/channels/$channelId/messages/$messageId/react", com.workhub.shared.ReactionWrite(emoji))
+
     suspend fun messageToTask(channelId: String, messageId: String): TaskDto =
         send(HttpMethod.Post, "/channels/$channelId/messages/$messageId/task")
 

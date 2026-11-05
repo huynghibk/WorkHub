@@ -39,6 +39,7 @@ object DatabaseFactory {
                 Channels,
                 ChannelMembers,
                 Messages,
+                MessageReactions,
                 Notifications,
                 Spaces,
                 SpaceMembers,
@@ -371,6 +372,13 @@ object ChannelMembers : Table("channel_members") {
     init {
         uniqueIndex(channelId, userId)
     }
+}
+
+object MessageReactions : Table("message_reactions") {
+    val messageId = varchar("message_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val emoji = varchar("emoji", 16)
+    override val primaryKey = PrimaryKey(messageId, userId)
 }
 
 object Messages : Table("messages") {

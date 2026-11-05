@@ -4,6 +4,7 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.DecodedJWT
 import com.workhub.shared.MessageDto
+import com.workhub.shared.ReactionDto
 import com.workhub.shared.NoteDto
 import com.workhub.shared.NoteWrite
 import com.workhub.shared.TaskDto
@@ -12,6 +13,7 @@ import io.ktor.http.HttpStatusCode
 import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
@@ -197,33 +199,42 @@ fun requireChannel(companyId: String, channelId: String) {
 }
 
 fun messageRows(channelId: String, parentId: String? = null): List<MessageDto> {
-    return Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
+    val rows = Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
         .select {
             val inChannel = (Messages.channelId eq channelId) and alive(Messages.deletedAt)
             if (parentId == null) inChannel and Messages.parentId.isNull() else inChannel and (Messages.parentId eq parentId)
         }
         .orderBy(Messages.createdAt to SortOrder.DESC)
         .limit(200)
-        .map { row ->
-            val id = row[Messages.id]
-            val replies = if (parentId == null) {
-                Messages.select { Messages.parentId eq id }.count().toInt()
-            } else {
-                0
-            }
-            MessageDto(
-                id = id,
-                channelId = row[Messages.channelId],
-                senderId = row[Messages.senderId],
-                senderName = row[Users.name],
-                body = row[Messages.body],
-                createdAt = row[Messages.createdAt],
-                parentId = row[Messages.parentId],
-                replyCount = replies,
-                locationUrl = row[Messages.locationUrl],
-                taskId = row[Messages.taskId],
-                noteId = row[Messages.noteId],
-            )
+        .toList()
+    val reactions = reactionsFor(rows.map { it[Messages.id] })
+    return rows.map { row ->
+        val id = row[Messages.id]
+        val replies = if (parentId == null) {
+            Messages.select { Messages.parentId eq id }.count().toInt()
+        } else {
+            0
         }
-        .reversed()
+        MessageDto(
+            id = id,
+            channelId = row[Messages.channelId],
+            senderId = row[Messages.senderId],
+            senderName = row[Users.name],
+            body = row[Messages.body],
+            createdAt = row[Messages.createdAt],
+            parentId = row[Messages.parentId],
+            replyCount = replies,
+            locationUrl = row[Messages.locationUrl],
+            taskId = row[Messages.taskId],
+            noteId = row[Messages.noteId],
+            reactions = reactions[id].orEmpty(),
+        )
+    }.reversed()
+}
+
+fun reactionsFor(messageIds: List<String>): Map<String, List<ReactionDto>> {
+    if (messageIds.isEmpty()) return emptyMap()
+    return MessageReactions.select { MessageReactions.messageId inList messageIds }
+        .groupBy { it[MessageReactions.messageId] }
+        .mapValues { (_, found) -> found.map { ReactionDto(it[MessageReactions.userId], it[MessageReactions.emoji]) } }
 }

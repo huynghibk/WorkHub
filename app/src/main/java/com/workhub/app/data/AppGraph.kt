@@ -130,10 +130,11 @@ class AppGraph private constructor(context: Context) {
     val api = WorkHubApi(session)
     val realtime = RealtimeHub(api)
     private val db = WorkHubDb.create(context)
-    val chat = ChatStore(db, api, session) { SyncWorker.enqueue(appContext) }
-    val offline = OfflineStore(db, api, session, chat) { SyncWorker.enqueue(appContext) }
+    val chat = ChatStore(db, api, session, ::enqueueSync)
+    val offline = OfflineStore(db, api, session, chat, ::enqueueSync)
     val keepAlive = ServerKeepAlive(api)
     val userPrefs = UserPrefs(context)
+    val marks = ChatMarks(context)
     /** Link Maps được chọn trong app để gắn vào chat / task / note. */
     val attachLink = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
     /** When true, MainNav hides the workspace/avatar chrome (task sub-functions use their own header). */
@@ -145,6 +146,12 @@ class AppGraph private constructor(context: Context) {
     val pendingChatChannelId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     /** Quick-create from bottom "+" : "task" | "note". */
     val pendingQuickCreate = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    /** Upload queued chat now, and let WorkManager retry whatever is still pending. */
+    private fun enqueueSync() {
+        scope.launch { runCatching { chat.push() } }
+        SyncWorker.enqueue(appContext)
+    }
 
     init {
         scope.launch {

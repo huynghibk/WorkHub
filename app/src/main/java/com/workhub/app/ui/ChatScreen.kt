@@ -1,23 +1,26 @@
 package com.workhub.app.ui
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -34,6 +38,16 @@ import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.AddReaction
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Reply
+import androidx.compose.material.icons.outlined.Shortcut
+import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Menu
@@ -54,6 +68,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,6 +82,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,12 +91,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.abs
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -136,7 +160,6 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var draft by remember { mutableStateOf("") }
     var attachedLocation by remember { mutableStateOf<String?>(null) }
-    var menu by remember { mutableStateOf(false) }
     var shareMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -171,21 +194,11 @@ fun ChatScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    var creating by remember { mutableStateOf(false) }
-    var channelName by remember { mutableStateOf("") }
-    var channelPrivate by remember { mutableStateOf(false) }
+    var newChat by remember { mutableStateOf(false) }
+    var newChatPicks by remember { mutableStateOf(setOf<String>()) }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
-    var addingMember by remember { mutableStateOf(false) }
-    var memberId by remember { mutableStateOf("") }
-    var directOpen by remember { mutableStateOf(false) }
-    var directUserId by remember { mutableStateOf("") }
-    var groupOpen by remember { mutableStateOf(false) }
-    var groupName by remember { mutableStateOf("") }
-    var groupMembers by remember { mutableStateOf(setOf<String>()) }
-    var groupError by remember { mutableStateOf<String?>(null) }
-    val groupNeedTwo = stringResource(R.string.group_need_two)
     val mentionQuery = draft.substringAfterLast(' ').let { token ->
         if (token.startsWith("@")) token.drop(1) else null
     }
@@ -230,30 +243,12 @@ fun ChatScreen(
                     groups = groups,
                     others = otherChannels,
                     selectedId = vm.channel?.id,
-                    canCreateChannel = canManageContent(session?.workspace?.role),
                     onClose = { scope.launch { drawerState.close() } },
                     onSelect = ::openChannel,
-                    onDirect = {
-                        scope.launch { drawerState.close() }
-                        directUserId = ""
-                        directOpen = true
+                    onNewChat = {
+                        newChatPicks = emptySet()
+                        newChat = true
                     },
-                    onGroup = {
-                        scope.launch { drawerState.close() }
-                        groupName = ""
-                        groupMembers = emptySet()
-                        groupError = null
-                        groupOpen = true
-                    },
-                    onCreateChannel = {
-                        scope.launch { drawerState.close() }
-                        creating = true
-                    },
-                    onAddMember = {
-                        scope.launch { drawerState.close() }
-                        addingMember = true
-                    },
-                    showAddMember = vm.channel?.isPrivate == true,
                 )
             }
         },
@@ -323,46 +318,11 @@ fun ChatScreen(
                     if (vm.thread != null) {
                         TextButton(onClick = vm::closeThread) { Text(stringResource(R.string.channel)) }
                     }
-                    IconButton(onClick = { menu = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.channel))
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.direct_message)) },
-                            onClick = {
-                                menu = false
-                                directUserId = ""
-                                directOpen = true
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.new_group)) },
-                            onClick = {
-                                menu = false
-                                groupName = ""
-                                groupMembers = emptySet()
-                                groupError = null
-                                groupOpen = true
-                            },
-                        )
-                        if (vm.channel?.isPrivate == true) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.add_person)) },
-                                onClick = {
-                                    menu = false
-                                    addingMember = true
-                                },
-                            )
-                        }
-                        if (canManageContent(session?.workspace?.role)) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.create_channel)) },
-                                onClick = {
-                                    menu = false
-                                    creating = true
-                                },
-                            )
-                        }
+                    IconButton(onClick = {
+                        newChatPicks = emptySet()
+                        newChat = true
+                    }) {
+                        Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.new_chat))
                     }
                 },
             )
@@ -371,7 +331,7 @@ fun ChatScreen(
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             vm.banner?.let {
                 Text(
-                    stringResource(R.string.task_created),
+                    stringResource(if (it == "note") R.string.note_created else R.string.task_created),
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
@@ -382,27 +342,78 @@ fun ChatScreen(
             if (vm.loading && chatMessages.isEmpty()) {
                 CircularProgressIndicator(Modifier.padding(24.dp))
             }
+            val markRevision by graph.marks.changes.collectAsStateWithLifecycle()
+            val maxShift = with(LocalDensity.current) { 96.dp.toPx() }
+            var timeDragging by remember { mutableStateOf(false) }
+            var timeShift by remember { mutableFloatStateOf(0f) }
+            val timeReveal by animateFloatAsState(
+                targetValue = if (timeDragging) timeShift else 0f,
+                animationSpec = if (timeDragging) snap() else tween(180),
+                label = "timeReveal",
+            )
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .pointerInput(maxShift) {
+                        val slop = viewConfiguration.touchSlop
+                        awaitEachGesture {
+                            val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                            var dragged = 0f
+                            var horizontal = false
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                val delta = change.positionChange()
+                                dragged += delta.x
+                                if (!horizontal && abs(dragged) > slop && abs(delta.x) > abs(delta.y)) {
+                                    horizontal = true
+                                    timeDragging = true
+                                }
+                                if (horizontal) {
+                                    change.consume()
+                                    timeShift = (timeShift + delta.x).coerceIn(-maxShift, maxShift)
+                                }
+                            }
+                            timeDragging = false
+                            timeShift = 0f
+                        }
+                    },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                items(chatMessages, key = { it.id }) { message ->
+                itemsIndexed(chatMessages, key = { _, it -> it.id }) { index, message ->
+                    val previous = chatMessages.getOrNull(index - 1)
                     MessageBubble(
                         message = message,
                         mine = message.senderId == myId,
+                        myId = myId,
+                        showName = message.senderId != myId && previous?.senderId != message.senderId,
                         sending = message.id in sendingIds,
                         onFailedTap = if (message.id in failedIds) ({ failedMessage = message }) else null,
                         onThread = if (vm.thread == null) ({ vm.openThread(message) }) else null,
-                        onMakeTask = if (
-                            message.taskId == null && message.noteId == null &&
-                            message.id !in sendingIds && message.id !in failedIds
-                        ) {
+                        onMakeTask = if (message.body.isNotBlank() && message.taskId == null && message.noteId == null) {
                             { vm.makeTask(message) }
                         } else {
                             null
                         },
+                        onMakeNote = if (message.body.isNotBlank() && message.taskId == null && message.noteId == null) {
+                            { vm.makeNote(message) }
+                        } else {
+                            null
+                        },
+                        timeReveal = timeReveal,
+                        timeMax = maxShift,
+                        reactions = message.reactions,
+                        pinned = markRevision >= 0 && graph.marks.pinned(message.id),
+                        starred = graph.marks.starred(message.id),
+                        channels = allChannels.filter { it.id != message.channelId },
+                        onReact = { emoji -> myId?.let { vm.react(message, emoji, it) } },
+                        onPin = { graph.marks.togglePin(message.id) },
+                        onStar = { graph.marks.toggleStar(message.id) },
+                        onForward = { vm.forward(message, it) },
                         task = message.taskId?.let(taskById::get),
                         note = message.noteId?.let(noteById::get),
                         modifier = Modifier.animateItem(),
@@ -569,26 +580,6 @@ fun ChatScreen(
     }
     } // ModalNavigationDrawer
 
-    if (creating) {
-        EditorDialog(
-            title = stringResource(R.string.new_channel),
-            onDismiss = { creating = false },
-            onSave = {
-                vm.createChannel(channelName, channelPrivate)
-                channelName = ""
-                channelPrivate = false
-                creating = false
-            },
-            onDelete = null,
-        ) {
-            OutlinedField(channelName, { channelName = it }, stringResource(R.string.channel_name))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.private_channel))
-                Switch(checked = channelPrivate, onCheckedChange = { channelPrivate = it })
-            }
-        }
-    }
-
     if (searching) {
         EditorDialog(
             title = stringResource(R.string.search_workspace),
@@ -608,78 +599,71 @@ fun ChatScreen(
         }
     }
 
-    if (directOpen) {
-        EditorDialog(
-            title = stringResource(R.string.direct_message),
-            onDismiss = { directOpen = false },
-            onSave = {
-                if (directUserId.isNotBlank() && directUserId != myId) {
-                    vm.openDirect(directUserId)
-                    directUserId = ""
-                    directOpen = false
-                }
+    if (newChat) {
+        NewChatDialog(
+            members = vm.members.filter { it.id != myId },
+            picked = newChatPicks,
+            onToggle = { id ->
+                newChatPicks = if (id in newChatPicks) newChatPicks - id else newChatPicks + id
             },
-            onDelete = null,
-        ) {
-            MemberPicker(
-                label = stringResource(R.string.members),
-                members = vm.members.filter { it.id != myId },
-                selectedIds = if (directUserId.isBlank()) emptySet() else setOf(directUserId),
-                multiple = false,
-                onToggle = { directUserId = it },
-            )
-        }
+            onOpen = { id ->
+                newChat = false
+                newChatPicks = emptySet()
+                vm.openDirect(id)
+                scope.launch { drawerState.close() }
+            },
+            onGroup = {
+                val ids = newChatPicks.toList()
+                newChat = false
+                newChatPicks = emptySet()
+                vm.openGroup("", ids)
+                scope.launch { drawerState.close() }
+            },
+            onDismiss = { newChat = false },
+        )
     }
+}
 
-    if (groupOpen) {
-        EditorDialog(
-            title = stringResource(R.string.new_group),
-            onDismiss = { groupOpen = false },
-            onSave = {
-                val others = groupMembers.filter { it != myId }
-                if (others.size < 2) {
-                    groupError = groupNeedTwo
-                } else {
-                    vm.openGroup(groupName, others.toList())
-                    groupName = ""
-                    groupMembers = emptySet()
-                    groupOpen = false
+@Composable
+private fun NewChatDialog(
+    members: List<MemberDto>,
+    picked: Set<String>,
+    onToggle: (String) -> Unit,
+    onOpen: (String) -> Unit,
+    onGroup: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.new_chat), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.new_chat_hint), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    items(members, key = { it.id }) { member ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                member.name,
+                                modifier = Modifier.weight(1f).clickable { onOpen(member.id) }.padding(vertical = 8.dp),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            androidx.compose.material3.Checkbox(
+                                checked = member.id in picked,
+                                onCheckedChange = { onToggle(member.id) },
+                            )
+                        }
+                    }
                 }
-            },
-            onDelete = null,
-            error = groupError,
-        ) {
-            Text(stringResource(R.string.group_hint), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedField(groupName, { groupName = it }, stringResource(R.string.group_name))
-            MemberPicker(
-                label = stringResource(R.string.members),
-                members = vm.members.filter { it.id != myId },
-                selectedIds = groupMembers,
-                onToggle = { id ->
-                    groupMembers = if (id in groupMembers) groupMembers - id else groupMembers + id
-                    groupError = null
-                },
-            )
-        }
-    }
-
-    if (addingMember) {
-        EditorDialog(
-            title = stringResource(R.string.add_to_channel),
-            onDismiss = { addingMember = false },
-            onSave = {
-                vm.channel?.let { vm.addMember(it.id, memberId) }
-                addingMember = false
-            },
-            onDelete = null,
-        ) {
-            MemberPicker(
-                label = stringResource(R.string.members),
-                members = vm.members,
-                selectedIds = if (memberId.isBlank()) emptySet() else setOf(memberId),
-                multiple = false,
-                onToggle = { memberId = it },
-            )
+                if (picked.size >= 2) {
+                    SoftPrimaryButton(text = stringResource(R.string.new_group), onClick = onGroup)
+                }
+            }
         }
     }
 }
@@ -691,14 +675,9 @@ private fun ChatSidebar(
     groups: List<ChannelDto>,
     others: List<ChannelDto>,
     selectedId: String?,
-    canCreateChannel: Boolean,
-    showAddMember: Boolean,
     onClose: () -> Unit,
     onSelect: (ChannelDto) -> Unit,
-    onDirect: () -> Unit,
-    onGroup: () -> Unit,
-    onCreateChannel: () -> Unit,
-    onAddMember: () -> Unit,
+    onNewChat: () -> Unit,
 ) {
     Column(
         Modifier
@@ -723,21 +702,12 @@ private fun ChatSidebar(
                 Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.chat_close_sidebar))
             }
         }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        TextButton(
+            onClick = onNewChat,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         ) {
-            TextButton(onClick = onDirect) { Text(stringResource(R.string.direct_message)) }
-            TextButton(onClick = onGroup) { Text(stringResource(R.string.new_group)) }
-            if (canCreateChannel) {
-                TextButton(onClick = onCreateChannel) { Text(stringResource(R.string.create_channel)) }
-            }
-            if (showAddMember) {
-                TextButton(onClick = onAddMember) { Text(stringResource(R.string.add_person)) }
-            }
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(stringResource(R.string.new_chat), modifier = Modifier.padding(start = 6.dp))
         }
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         LazyColumn(
@@ -826,9 +796,13 @@ private fun SidebarChannelRow(
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             )
             Text(
-                channel.kind.lowercase().replaceFirstChar { it.titlecase() },
+                when {
+                    channel.kind.equals("DIRECT", true) || channel.kind.equals("DM", true) -> stringResource(R.string.direct_message)
+                    channel.kind.equals("GROUP", true) -> stringResource(R.string.new_group)
+                    else -> stringResource(R.string.chat_channels)
+                },
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF9CA3AF),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -836,35 +810,45 @@ private fun SidebarChannelRow(
 
 @Composable
 private fun SendingClock() {
-    val spin = rememberInfiniteTransition(label = "send")
-    val angle by spin.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing)),
-        label = "sendAngle",
-    )
     Icon(
         Icons.Outlined.Schedule,
         contentDescription = stringResource(R.string.chat_sending),
-        modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = angle },
-        tint = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.size(16.dp),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: MessageDto,
     mine: Boolean,
+    myId: String?,
+    showName: Boolean,
     sending: Boolean,
     onFailedTap: (() -> Unit)?,
     onThread: (() -> Unit)?,
     onMakeTask: (() -> Unit)?,
+    onMakeNote: (() -> Unit)?,
+    timeReveal: Float,
+    timeMax: Float,
+    reactions: List<com.workhub.shared.ReactionDto>,
+    pinned: Boolean,
+    starred: Boolean,
+    channels: List<ChannelDto>,
+    onReact: (String) -> Unit,
+    onPin: () -> Unit,
+    onStar: () -> Unit,
+    onForward: (String) -> Unit,
     task: TaskDto? = null,
     note: NoteDto? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val failed = onFailedTap != null
+    var menu by remember { mutableStateOf(false) }
+    var emojiBar by remember { mutableStateOf(false) }
+    var forwarding by remember { mutableStateOf(false) }
     val mapsUrl = message.locationUrl?.takeIf { it.isNotBlank() }
         ?: Regex("""https?://(?:www\.)?(?:maps\.google\.com|google\.com/maps)[^\s]*""")
             .find(message.body)?.value
@@ -873,91 +857,326 @@ private fun MessageBubble(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (failed) Modifier.clickable(onClick = onFailedTap!!) else Modifier),
+            .combinedClickable(
+                onClick = { onFailedTap?.invoke() },
+                onLongClick = { menu = true },
+            ),
         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
     ) {
-        if (!mine) {
-            Text(message.senderName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        }
-        if (sharedTask || sharedNote) {
-            EntityRailCard(
-                task = sharedTask,
-                title = task?.title ?: note?.title ?: message.body,
-                subtitle = task?.let { statusLabel(it.status) } ?: note?.body?.takeIf { it.isNotBlank() },
-                modifier = Modifier.widthIn(max = 280.dp),
-            )
-        } else if (message.body.isNotBlank()) {
-            val bubbleColor = when {
-                failed -> MaterialTheme.colorScheme.errorContainer
-                mine -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.surfaceVariant
-            }
-            val textColor = when {
-                failed -> MaterialTheme.colorScheme.onErrorContainer
-                mine -> MaterialTheme.colorScheme.onPrimary
-                else -> MaterialTheme.colorScheme.onSurface
-            }
-            Box(
+        Box(Modifier.fillMaxWidth()) {
+            Text(
+                formatTime(message.createdAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
-                    .widthIn(max = 280.dp)
-                    .then(
-                        if (failed) Modifier.border(1.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
-                        else Modifier,
-                    )
-                    .background(color = bubbleColor, shape = RoundedCornerShape(16.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .align(if (timeReveal >= 0f) Alignment.CenterStart else Alignment.CenterEnd)
+                    .graphicsLayer { alpha = if (timeMax <= 0f) 0f else (abs(timeReveal) / timeMax).coerceIn(0f, 1f) },
+            )
+            Column(
+                modifier = Modifier
+                    .align(if (mine) Alignment.CenterEnd else Alignment.CenterStart)
+                    .graphicsLayer { translationX = timeReveal },
+                horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
             ) {
-                Text(message.body, color = textColor)
-            }
-        }
-        if (mapsUrl != null) {
-            TextButton(
-                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl))) },
-                modifier = Modifier.height(TouchTarget),
-            ) {
-                Text(stringResource(R.string.location_attached_label))
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(formatTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-            if (sending) {
-                SendingClock()
-            }
-            if (failed) {
-                Icon(
-                    Icons.Filled.Error,
-                    contentDescription = stringResource(R.string.chat_failed),
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        Row {
-            if (onThread != null) {
-                TextButton(onClick = onThread, modifier = Modifier.height(TouchTarget)) {
+                if (showName) {
                     Text(
-                        if (message.replyCount > 0) {
-                            stringResource(R.string.thread_count, message.replyCount)
-                        } else {
-                            stringResource(R.string.chat_thread)
-                        },
+                        message.senderName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (mine) {
+                        ReactButton(onClick = { emojiBar = true })
+                    }
+                    if (sharedTask || sharedNote) {
+                        EntityRailCard(
+                            task = sharedTask,
+                            title = task?.title ?: note?.title ?: message.body,
+                            subtitle = task?.let { statusLabel(it.status) } ?: note?.body?.takeIf { it.isNotBlank() },
+                            modifier = Modifier.widthIn(max = 260.dp),
+                        )
+                    } else if (message.body.isNotBlank()) {
+                        val bubbleColor = when {
+                            failed -> MaterialTheme.colorScheme.errorContainer
+                            mine -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.surface
+                        }
+                        val textColor = when {
+                            failed -> MaterialTheme.colorScheme.onErrorContainer
+                            mine -> MaterialTheme.colorScheme.onPrimary
+                            else -> MaterialTheme.colorScheme.onSurface
+                        }
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 260.dp)
+                                .then(
+                                    if (failed) {
+                                        Modifier.border(1.5.dp, MaterialTheme.colorScheme.error, RoundedCornerShape(18.dp))
+                                    } else if (!mine) {
+                                        Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .background(color = bubbleColor, shape = RoundedCornerShape(18.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text(message.body, color = textColor)
+                        }
+                    }
+                    if (!mine) {
+                        ReactButton(onClick = { emojiBar = true })
+                    }
+                    if (sending) SendingClock()
+                    if (failed) {
+                        Icon(
+                            Icons.Filled.Error,
+                            contentDescription = stringResource(R.string.chat_failed),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (mapsUrl != null) {
+                    Text(
+                        stringResource(R.string.location_attached_label),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl))) },
+                    )
+                }
+                val reactionMarks = reactions.groupBy { it.emoji }
+                if (reactionMarks.isNotEmpty() || pinned || starred) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(top = 2.dp),
+                    ) {
+                        reactionMarks.forEach { (emoji, people) ->
+                            Text(
+                                if (people.size > 1) "$emoji ${people.size}" else emoji,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        if (pinned) {
+                            Icon(Icons.Filled.PushPin, contentDescription = stringResource(R.string.chat_pin), modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
+                        }
+                        if (starred) {
+                            Icon(Icons.Filled.Star, contentDescription = stringResource(R.string.chat_star), modifier = Modifier.size(12.dp), tint = Color(0xFFF59E0B))
+                        }
+                    }
+                }
+                if (message.replyCount > 0 && onThread != null) {
+                    Text(
+                        stringResource(R.string.thread_count, message.replyCount),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable(onClick = onThread),
                     )
                 }
             }
-            if (onMakeTask != null) {
-                TextButton(onClick = onMakeTask, modifier = Modifier.height(TouchTarget)) {
-                    Text(stringResource(R.string.make_task))
+        }
+        if (emojiBar || menu) {
+            MessageActions(
+                full = menu,
+                forwarding = forwarding && menu,
+                channels = channels,
+                selected = reactions.firstOrNull { it.userId == myId }?.emoji,
+                onDismiss = { menu = false; emojiBar = false; forwarding = false },
+                onReact = { emoji ->
+                    onReact(emoji)
+                    menu = false
+                    emojiBar = false
+                },
+                onReply = onThread?.let { action -> { menu = false; action() } },
+                onForward = { forwarding = true },
+                onForwardTo = { id ->
+                    menu = false
+                    forwarding = false
+                    onForward(id)
+                },
+                onShare = {
+                    menu = false
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, message.body)
+                    }
+                    context.startActivity(Intent.createChooser(send, context.getString(R.string.chat_share)))
+                },
+                onCopy = {
+                    menu = false
+                    copyTextToClipboard(context, message.body)
+                },
+                onTask = onMakeTask?.let { action -> { menu = false; action() } },
+                onNote = onMakeNote?.let { action -> { menu = false; action() } },
+                onPin = { menu = false; onPin() },
+                onStar = { menu = false; onStar() },
+                pinned = pinned,
+                starred = starred,
+            )
+        }
+    }
+}
+
+private val ChatEmojis = listOf("❤️", "👍", "😂", "😮", "😢", "😠")
+
+@Composable
+private fun ReactButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Outlined.AddReaction,
+            contentDescription = stringResource(R.string.chat_react),
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun MessageActions(
+    full: Boolean,
+    forwarding: Boolean,
+    channels: List<ChannelDto>,
+    selected: String?,
+    pinned: Boolean,
+    starred: Boolean,
+    onDismiss: () -> Unit,
+    onReact: (String) -> Unit,
+    onReply: (() -> Unit)?,
+    onForward: () -> Unit,
+    onForwardTo: (String) -> Unit,
+    onShare: () -> Unit,
+    onCopy: () -> Unit,
+    onTask: (() -> Unit)?,
+    onNote: (() -> Unit)?,
+    onPin: () -> Unit,
+    onStar: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ChatEmojis.forEach { emoji ->
+                        Text(
+                            emoji,
+                            fontSize = 26.sp,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (emoji == selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                .clickable { onReact(emoji) }
+                                .padding(6.dp),
+                        )
+                    }
+                }
+            }
+            if (full) Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp,
+            ) {
+                if (forwarding) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.chat_forward_to), style = MaterialTheme.typography.titleMedium)
+                        if (channels.isEmpty()) {
+                            Text(stringResource(R.string.chat_forward), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        channels.take(8).forEach { channel ->
+                            Text(
+                                channel.name,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onForwardTo(channel.id) }
+                                    .padding(vertical = 10.dp),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        }
+                    }
+                } else {
+                    val actions = listOfNotNull(
+                        onReply?.let { BubbleAction(stringResource(R.string.chat_reply), Icons.Outlined.Reply, it) },
+                        BubbleAction(stringResource(R.string.chat_forward), Icons.Outlined.Shortcut, onForward),
+                        BubbleAction(stringResource(R.string.chat_share), Icons.Filled.Share, onShare),
+                        BubbleAction(stringResource(R.string.chat_copy_text), Icons.Filled.ContentCopy, onCopy),
+                        onTask?.let { BubbleAction(stringResource(R.string.make_task), Icons.Outlined.TaskAlt, it) },
+                        onNote?.let { BubbleAction(stringResource(R.string.quick_create_note), Icons.Outlined.EditNote, it) },
+                        BubbleAction(stringResource(R.string.chat_pin), Icons.Filled.PushPin, onPin, pinned),
+                        BubbleAction(stringResource(R.string.chat_star), if (starred) Icons.Filled.Star else Icons.Outlined.StarBorder, onStar, starred),
+                    )
+                    Column(Modifier.padding(8.dp)) {
+                        actions.chunked(4).forEach { row ->
+                            Row(Modifier.fillMaxWidth()) {
+                                row.forEach { action ->
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable(onClick = action.onClick)
+                                            .padding(vertical = 10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Icon(
+                                            action.icon,
+                                            contentDescription = action.label,
+                                            tint = if (action.active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            action.label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            maxLines = 2,
+                                        )
+                                    }
+                                }
+                                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+private data class BubbleAction(
+    val label: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+    val active: Boolean = false,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModel(
     private val api: WorkHubApi,
     private val realtime: com.workhub.app.data.RealtimeHub,
     private val chat: ChatStore,
+    private val offline: com.workhub.app.data.OfflineStore,
 ) : ViewModel() {
     /** Eager: the view model itself looks up channels by id. */
     val channels: StateFlow<List<ChannelDto>> =
@@ -1107,16 +1326,27 @@ class ChatViewModel(
     }
 
     fun makeTask(message: MessageDto) {
-        if (message.id in pendingIds.value || message.id in failedIds.value) {
-            error = "Tin nhắn chưa gửi xong, hãy thử lại khi có mạng"
-            return
-        }
         viewModelScope.launch {
             banner = null
             error = null
             try {
-                api.messageToTask(message.channelId, message.id)
-                banner = "created"
+                val title = messageTitle(message.body)
+                offline.saveTask(null, com.workhub.shared.TaskWrite(title = title, description = message.body))
+                banner = "task"
+            } catch (e: Exception) {
+                error = e.userMessage()
+            }
+        }
+    }
+
+    fun makeNote(message: MessageDto) {
+        viewModelScope.launch {
+            banner = null
+            error = null
+            try {
+                val title = messageTitle(message.body)
+                offline.saveNote(null, com.workhub.shared.NoteWrite(title = title, body = message.body))
+                banner = "note"
             } catch (e: Exception) {
                 error = e.userMessage()
             }
@@ -1131,6 +1361,24 @@ class ChatViewModel(
             } catch (e: Exception) {
                 error = e.userMessage()
             }
+        }
+    }
+
+    fun react(message: MessageDto, emoji: String, userId: String) {
+        val current = message.reactions.firstOrNull { it.userId == userId }?.emoji
+        val next = if (current == emoji) "" else emoji
+        viewModelScope.launch {
+            chat.applyReaction(
+                com.workhub.shared.ReactionEvent(message.id, message.channelId, userId, next),
+            )
+            runCatching { api.react(message.channelId, message.id, next) }
+        }
+    }
+
+    fun forward(message: MessageDto, channelId: String) {
+        viewModelScope.launch {
+            runCatching { chat.send(channelId, message.body, null, message.locationUrl) }
+                .onFailure { error = it.userMessage() }
         }
     }
 
@@ -1156,9 +1404,13 @@ class ChatViewModel(
     }
 }
 
+private fun messageTitle(body: String): String =
+    body.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(80)?.ifBlank { null }
+        ?: body.trim().take(80).ifBlank { "…" }
+
 private fun chatFactory(graph: com.workhub.app.data.AppGraph) = object : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return ChatViewModel(graph.api, graph.realtime, graph.chat) as T
+        return ChatViewModel(graph.api, graph.realtime, graph.chat, graph.offline) as T
     }
 }

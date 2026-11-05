@@ -199,6 +199,28 @@ internal fun WorkspaceBar(
                     )
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    val shownName = user?.name?.trim().orEmpty()
+                    if (shownName.isNotEmpty()) {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                            Text(
+                                shownName,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            user?.username?.trim()?.takeIf { it.isNotEmpty() }?.let { handle ->
+                                Text(
+                                    handle,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                    }
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.settings)) },
                         onClick = {

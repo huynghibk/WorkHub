@@ -274,6 +274,21 @@ data class MessageDto(
      */
     val taskId: String? = null,
     val noteId: String? = null,
+    val reactions: List<ReactionDto> = emptyList(),
+)
+
+@Serializable
+data class ReactionDto(val userId: String, val emoji: String)
+
+@Serializable
+data class ReactionWrite(val emoji: String = "")
+
+@Serializable
+data class ReactionEvent(
+    val messageId: String,
+    val channelId: String,
+    val userId: String,
+    val emoji: String = "",
 )
 
 @Serializable
@@ -297,6 +312,8 @@ data class WsEvent(
     val note: NoteDto? = null,
     /** type = task_delete / note_delete */
     val deletedId: String? = null,
+    /** type = reaction */
+    val reaction: ReactionEvent? = null,
 )
 
 @Serializable
