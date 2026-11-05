@@ -32,12 +32,14 @@ import com.workhub.shared.LoginRequest
 import com.workhub.shared.MemberDto
 import com.workhub.shared.MessageDto
 import com.workhub.shared.MessageWrite
+import com.workhub.shared.forServer
 import com.workhub.shared.NoteDto
 import com.workhub.shared.NoteWrite
 import com.workhub.shared.ProfileUpdate
 import com.workhub.shared.RegisterRequest
 import com.workhub.shared.TaskDto
 import com.workhub.shared.TaskWrite
+import com.workhub.shared.UploadResult
 import com.workhub.shared.UserDto
 import com.workhub.shared.WsEvent
 import io.ktor.client.HttpClient
@@ -47,9 +49,12 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
+import io.ktor.http.Headers
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -62,6 +67,8 @@ import io.ktor.websocket.readText
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -289,6 +296,9 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun openGroup(name: String, memberIds: List<String>): ChannelDto =
         send(HttpMethod.Post, "/channels/group", GroupWrite(name, memberIds))
 
+    suspend fun renameChannel(channelId: String, name: String): ChannelDto =
+        send(HttpMethod.Put, "/channels/$channelId/name", ChannelWrite(name))
+
     suspend fun unreadNotifications(): List<NotificationDto> = send(HttpMethod.Get, "/notifications")
 
     suspend fun markNotificationsRead(ids: List<String>) {
@@ -299,22 +309,109 @@ class WorkHubApi(private val session: SessionStore) {
         send<Unit>(HttpMethod.Post, "/channels/$channelId/members", MemberAdd(userId))
     }
 
-    suspend fun messages(channelId: String, parentId: String? = null): List<MessageDto> {
-        val path = if (parentId.isNullOrBlank()) {
-            "/channels/$channelId/messages"
-        } else {
-            "/channels/$channelId/messages?parent=$parentId"
+    suspend fun messages(
+        channelId: String,
+        parentId: String? = null,
+        before: Long? = null,
+        after: Long? = null,
+        limit: Int? = null,
+        query: String? = null,
+    ): List<MessageDto> {
+        val params = buildList {
+            if (!parentId.isNullOrBlank()) add("parent=$parentId")
+            before?.let { add("before=$it") }
+            after?.let { add("after=$it") }
+            limit?.let { add("limit=$it") }
+            query?.trim()?.takeIf { it.length >= 2 }?.let { add("q=${java.net.URLEncoder.encode(it, Charsets.UTF_8.name())}") }
         }
-        return send(HttpMethod.Get, path)
+        val qs = if (params.isEmpty()) "" else "?" + params.joinToString("&")
+        return send(HttpMethod.Get, "/channels/$channelId/messages$qs")
+    }
+
+    suspend fun channelReadStates(): List<com.workhub.shared.ChannelReadDto> =
+        send(HttpMethod.Get, "/channels/read-states")
+
+    suspend fun markChannelRead(channelId: String, lastReadAt: Long, lastMessageId: String?) {
+        send<Unit>(
+            HttpMethod.Post,
+            "/channels/$channelId/read",
+            com.workhub.shared.ChannelReadWrite(lastReadAt, lastMessageId),
+        )
+    }
+
+    suspend fun editMessage(channelId: String, messageId: String, body: String): MessageDto =
+        send(HttpMethod.Patch, "/channels/$channelId/messages/$messageId", com.workhub.shared.MessageEdit(body))
+
+    suspend fun deleteMessage(channelId: String, messageId: String): MessageDto =
+        send(HttpMethod.Delete, "/channels/$channelId/messages/$messageId")
+
+    suspend fun setMessagePin(channelId: String, messageId: String, pinned: Boolean) {
+        send<Unit>(HttpMethod.Put, "/channels/$channelId/messages/$messageId/pin", com.workhub.shared.PinWrite(pinned))
+    }
+
+    suspend fun pinnedMessages(channelId: String): List<String> =
+        send(HttpMethod.Get, "/channels/$channelId/pins")
+
+    suspend fun leaveChannel(channelId: String) {
+        send<Unit>(HttpMethod.Post, "/channels/$channelId/leave")
+    }
+
+    suspend fun muteChannel(channelId: String, muted: Boolean) {
+        if (muted) {
+            send<Unit>(HttpMethod.Put, "/channels/$channelId/mute")
+        } else {
+            send<Unit>(HttpMethod.Delete, "/channels/$channelId/mute")
+        }
+    }
+
+    suspend fun onlineUserIds(): List<String> =
+        send<com.workhub.shared.IdList>(HttpMethod.Get, "/presence/online").ids
+
+    suspend fun registerPushToken(token: String) {
+        send<Unit>(HttpMethod.Post, "/push-tokens", com.workhub.shared.PushTokenWrite(token))
     }
 
     /** Idempotent send with a client-generated id (used by the offline queue). */
     suspend fun putMessage(channelId: String, id: String, write: MessageWrite, workspaceId: String): MessageDto =
-        send(HttpMethod.Put, "/channels/$channelId/messages/$id", write, workspaceId = workspaceId)
+        send(HttpMethod.Put, "/channels/$channelId/messages/$id", write.forServer(), workspaceId = workspaceId)
 
     /** Older servers only accept this. The returned id is the server's, not the client's. */
     suspend fun postMessage(channelId: String, write: MessageWrite, workspaceId: String): MessageDto =
-        send(HttpMethod.Post, "/channels/$channelId/messages", write, workspaceId = workspaceId)
+        send(HttpMethod.Post, "/channels/$channelId/messages", write.forServer(), workspaceId = workspaceId)
+
+    suspend fun upload(file: java.io.File, fileName: String): UploadResult {
+        val current = session.current()
+        val token = current.token ?: throw ApiException("Bạn cần đăng nhập lại")
+        val response = http.submitFormWithBinaryData(
+            url = current.baseUrl.trimEnd('/') + "/upload",
+            formData = formData {
+                append(
+                    "file",
+                    file.readBytes(),
+                    Headers.build {
+                        append(HttpHeaders.ContentType, contentTypeFor(fileName))
+                        append(HttpHeaders.ContentDisposition, "filename=${fileName.replace("\"", "")}")
+                    },
+                )
+            },
+        ) {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        trackClock(response)
+        if (!response.status.isSuccess()) {
+            throw ApiException("Không tải được tệp (${response.status.value})", response.status.value)
+        }
+        return response.body()
+    }
+
+    private fun contentTypeFor(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        "pdf" -> "application/pdf"
+        else -> "application/octet-stream"
+    }
 
     suspend fun react(channelId: String, messageId: String, emoji: String): com.workhub.shared.ReactionEvent =
         send(HttpMethod.Put, "/channels/$channelId/messages/$messageId/react", com.workhub.shared.ReactionWrite(emoji))
@@ -322,7 +419,10 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun messageToTask(channelId: String, messageId: String): TaskDto =
         send(HttpMethod.Post, "/channels/$channelId/messages/$messageId/task")
 
-    suspend fun listen(onEvent: suspend (WsEvent) -> Unit) {
+    suspend fun openRealtimeSession(
+        onConnected: (suspend (WsEvent) -> Unit) -> Unit,
+        onEvent: suspend (WsEvent) -> Unit,
+    ) {
         val current = session.current()
         val token = current.token ?: throw ApiException("Bạn cần đăng nhập lại")
         val wsUrl = current.baseUrl.trimEnd('/').replace(Regex("^http"), "ws") + "/ws"
@@ -331,10 +431,25 @@ class WorkHubApi(private val session: SessionStore) {
             header(HttpHeaders.Authorization, "Bearer $token")
             header("X-Workspace-Id", workspaceId)
         }) {
-            for (frame in incoming) {
-                val text = (frame as? Frame.Text)?.readText() ?: continue
-                val event = runCatching { json.decodeFromString(WsEvent.serializer(), text) }.getOrNull() ?: continue
-                onEvent(event)
+            val sendEvent: suspend (WsEvent) -> Unit = { event ->
+                send(Frame.Text(json.encodeToString(WsEvent.serializer(), event)))
+            }
+            onConnected(sendEvent)
+            val pingJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {
+                while (isActive) {
+                    delay(25_000)
+                    sendEvent(WsEvent(type = "ping"))
+                }
+            }
+            try {
+                for (frame in incoming) {
+                    val text = (frame as? Frame.Text)?.readText() ?: continue
+                    val event = runCatching { json.decodeFromString(WsEvent.serializer(), text) }.getOrNull() ?: continue
+                    if (event.type == "pong") continue
+                    onEvent(event)
+                }
+            } finally {
+                pingJob.cancel()
             }
         }
     }

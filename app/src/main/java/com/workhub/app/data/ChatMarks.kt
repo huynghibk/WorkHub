@@ -28,6 +28,14 @@ class ChatMarks(context: Context) {
         tick.value++
     }
 
+    fun lastRead(channelId: String): Long = prefs.getLong(readKey(channelId), 0L)
+
+    fun markRead(channelId: String, at: Long) {
+        if (at <= lastRead(channelId)) return
+        prefs.edit().putLong(readKey(channelId), at).apply()
+        tick.value++
+    }
+
     fun starred(id: String): Boolean = prefs.getBoolean(starKey(id), false)
 
     fun toggleStar(id: String) {
@@ -38,4 +46,5 @@ class ChatMarks(context: Context) {
     private fun reactKey(id: String) = "r:$id"
     private fun pinKey(id: String) = "p:$id"
     private fun starKey(id: String) = "s:$id"
+    private fun readKey(id: String) = "read:$id"
 }

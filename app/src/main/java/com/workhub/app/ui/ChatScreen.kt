@@ -8,7 +8,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -50,12 +53,17 @@ import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.ViewDay
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -83,6 +91,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -100,6 +109,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.abs
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -159,6 +169,17 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var draft by remember { mutableStateOf("") }
+    var quoting by remember { mutableStateOf<MessageDto?>(null) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val file = uri?.let { copyOutgoing(context, it) } ?: return@rememberLauncherForActivityResult
+        vm.send("", localPath = file.absolutePath, attachmentName = file.name, attachmentKind = "IMAGE", replyTo = quoting)
+        quoting = null
+    }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val file = uri?.let { copyOutgoing(context, it) } ?: return@rememberLauncherForActivityResult
+        vm.send("", localPath = file.absolutePath, attachmentName = file.name, attachmentKind = "FILE", replyTo = quoting)
+        quoting = null
+    }
     var attachedLocation by remember { mutableStateOf<String?>(null) }
     var shareMenu by remember { mutableStateOf(false) }
 
@@ -196,7 +217,16 @@ fun ChatScreen(
     }
     var newChat by remember { mutableStateOf(false) }
     var newChatPicks by remember { mutableStateOf(setOf<String>()) }
+    var renamingGroup by remember { mutableStateOf(false) }
+    var groupNameDraft by remember(vm.channel?.id, vm.channel?.name) { mutableStateOf(vm.channel?.name.orEmpty()) }
     var searching by remember { mutableStateOf(false) }
+    var channelSearch by remember { mutableStateOf(false) }
+    var channelQuery by remember { mutableStateOf("") }
+    var channelHits by remember { mutableStateOf<List<MessageDto>>(emptyList()) }
+    var editTarget by remember { mutableStateOf<MessageDto?>(null) }
+    var editDraft by remember { mutableStateOf("") }
+    var createWorkspaceChannel by remember { mutableStateOf(false) }
+    var newChannelName by remember { mutableStateOf("") }
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     val mentionQuery = draft.substringAfterLast(' ').let { token ->
@@ -214,8 +244,38 @@ fun ChatScreen(
         onDispose { AppVisibility.channelId = null }
     }
 
-    LaunchedEffect(chatMessages.size) {
-        if (chatMessages.isNotEmpty()) listState.animateScrollToItem(chatMessages.lastIndex)
+    var stickToBottom by remember { mutableStateOf(true) }
+    var newBelow by remember { mutableIntStateOf(0) }
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            last >= info.totalItemsCount - 2
+        }.collect { stickToBottom = it }
+    }
+    var lastListedId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(chatMessages.lastOrNull()?.id, stickToBottom) {
+        if (chatMessages.isEmpty()) return@LaunchedEffect
+        val last = chatMessages.last()
+        if (stickToBottom || last.senderId == myId) {
+            listState.animateScrollToItem(chatMessages.lastIndex)
+            newBelow = 0
+            lastListedId = last.id
+        } else if (last.id != lastListedId) {
+            newBelow += 1
+            lastListedId = last.id
+        }
+    }
+    LaunchedEffect(listState.firstVisibleItemIndex, vm.canLoadOlder) {
+        if (listState.firstVisibleItemIndex == 0 && vm.canLoadOlder && !vm.loadingOlder) {
+            vm.loadOlder()
+        }
+    }
+    LaunchedEffect(vm.channel?.id, chatMessages.lastOrNull()?.id) {
+        val id = vm.channel?.id ?: return@LaunchedEffect
+        val last = chatMessages.lastOrNull() ?: return@LaunchedEffect
+        graph.marks.markRead(id, last.createdAt)
+        vm.publishRead(id, last.createdAt, last.id)
     }
 
     fun openChannel(channel: ChannelDto) {
@@ -233,10 +293,19 @@ fun ChatScreen(
         }
     }
     val latest by vm.latest.collectAsStateWithLifecycle()
+    val peeks by vm.peeks.collectAsStateWithLifecycle()
+    val markRevision by graph.marks.changes.collectAsStateWithLifecycle()
+    val onlineIds by vm.onlineIds.collectAsStateWithLifecycle()
     if (vm.channel == null) {
         ChatInbox(
             channels = allChannels,
             latest = latest,
+            myId = myId,
+            onlineIds = onlineIds,
+            unreadOf = { id ->
+                val since = if (markRevision >= 0) graph.marks.lastRead(id) else 0L
+                peeks.count { it.channelId == id && it.senderId != myId && it.createdAt > since }
+            },
             onOpen = vm::open,
             onNew = {
                 newChatPicks = emptySet()
@@ -261,6 +330,7 @@ fun ChatScreen(
                         newChatPicks = emptySet()
                         newChat = true
                     },
+                    onCreateChannel = { createWorkspaceChannel = true },
                 )
             }
         },
@@ -277,14 +347,16 @@ fun ChatScreen(
                             if (vm.thread != null) threadTitle else (vm.channel?.name ?: chatTitle),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable(
+                                enabled = vm.thread == null && vm.channel?.kind.equals("GROUP", true),
+                            ) { renamingGroup = true },
                         )
                         Text(
-                            if (vm.thread != null) {
-                                vm.thread?.body.orEmpty()
-                            } else if (vm.live) {
-                                stringResource(R.string.chat_live)
-                            } else {
-                                stringResource(R.string.chat_reconnecting)
+                            when {
+                                vm.typingLabel != null -> vm.typingLabel!!
+                                vm.thread != null -> vm.thread?.body.orEmpty()
+                                vm.live -> stringResource(R.string.chat_live)
+                                else -> stringResource(R.string.chat_reconnecting)
                             },
                             style = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
@@ -299,6 +371,9 @@ fun ChatScreen(
                                 contentDescription = stringResource(R.string.back),
                             )
                         }
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Outlined.Menu, contentDescription = stringResource(R.string.chat_channels))
+                        }
                     }
                 },
                 actions = {
@@ -312,7 +387,8 @@ fun ChatScreen(
                             ),
                         )
                     }
-                    TextButton(onClick = { searching = true }) { Text(stringResource(R.string.search)) }
+                    TextButton(onClick = { channelSearch = true }) { Text(stringResource(R.string.search)) }
+                    TextButton(onClick = { searching = true }) { Text(stringResource(R.string.search_workspace)) }
                     if (vm.thread != null) {
                         TextButton(onClick = vm::closeThread) { Text(stringResource(R.string.channel)) }
                     }
@@ -340,7 +416,6 @@ fun ChatScreen(
             if (vm.loading && chatMessages.isEmpty()) {
                 CircularProgressIndicator(Modifier.padding(24.dp))
             }
-            val markRevision by graph.marks.changes.collectAsStateWithLifecycle()
             val maxShift = with(LocalDensity.current) { 96.dp.toPx() }
             var timeDragging by remember { mutableStateOf(false) }
             var timeShift by remember { mutableFloatStateOf(0f) }
@@ -349,15 +424,17 @@ fun ChatScreen(
                 animationSpec = if (timeDragging) snap() else tween(180),
                 label = "timeReveal",
             )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
                     .pointerInput(maxShift) {
                         val slop = viewConfiguration.touchSlop
                         awaitEachGesture {
                             val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                            val edge = 36.dp.toPx()
+                            if (down.position.x > edge && down.position.x < size.width - edge) return@awaitEachGesture
                             var dragged = 0f
                             var horizontal = false
                             while (true) {
@@ -384,19 +461,28 @@ fun ChatScreen(
             ) {
                 itemsIndexed(chatMessages, key = { _, it -> it.id }) { index, message ->
                     val previous = chatMessages.getOrNull(index - 1)
+                    val next = chatMessages.getOrNull(index + 1)
+                    val continuesPrev = previous != null &&
+                        previous.senderId == message.senderId &&
+                        message.createdAt - previous.createdAt in 0..120_000
+                    val continuesNext = next != null &&
+                        next.senderId == message.senderId &&
+                        next.createdAt - message.createdAt in 0..120_000
                     MessageBubble(
                         message = message,
                         mine = message.senderId == myId,
                         myId = myId,
-                        showName = message.senderId != myId && previous?.senderId != message.senderId,
+                        showName = message.senderId != myId && !continuesPrev,
+                        showAvatar = message.senderId != myId && !continuesNext,
                         sending = message.id in sendingIds,
                         onFailedTap = if (message.id in failedIds) ({ failedMessage = message }) else null,
                         onThread = if (vm.thread == null) ({ vm.openThread(message) }) else null,
-                        onMakeTask = if (message.body.isNotBlank() && message.taskId == null && message.noteId == null) {
+                        onMakeTask = if (! (message.id in sendingIds) && message.body.isNotBlank() && message.taskId == null && message.noteId == null) {
                             { vm.makeTask(message) }
                         } else {
                             null
                         },
+                        waitingToTask = message.id in sendingIds,
                         onMakeNote = if (message.body.isNotBlank() && message.taskId == null && message.noteId == null) {
                             { vm.makeNote(message) }
                         } else {
@@ -409,14 +495,47 @@ fun ChatScreen(
                         starred = graph.marks.starred(message.id),
                         channels = allChannels.filter { it.id != message.channelId },
                         onReact = { emoji -> myId?.let { vm.react(message, emoji, it) } },
-                        onPin = { graph.marks.togglePin(message.id) },
+                        onPin = {
+                            val next = !graph.marks.pinned(message.id)
+                            graph.marks.togglePin(message.id)
+                            scope.launch {
+                                runCatching { graph.api.setMessagePin(message.channelId, message.id, next) }
+                            }
+                        },
+                        onEdit = if (message.senderId == myId && !message.deleted) {
+                            { editTarget = message }
+                        } else {
+                            null
+                        },
+                        onDelete = if (message.senderId == myId && !message.deleted) {
+                            { vm.deleteMessage(message) }
+                        } else {
+                            null
+                        },
                         onStar = { graph.marks.toggleStar(message.id) },
                         onForward = { vm.forward(message, it) },
+                        onQuote = { quoting = message },
                         task = message.taskId?.let(taskById::get),
                         note = message.noteId?.let(noteById::get),
                         modifier = Modifier.animateItem(),
                     )
                 }
+            }
+            if (newBelow > 0) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        scope.launch {
+                            listState.animateScrollToItem(chatMessages.lastIndex)
+                            newBelow = 0
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(12.dp),
+                    icon = { Icon(Icons.Filled.ArrowDownward, contentDescription = null) },
+                    text = { Text(stringResource(R.string.chat_new_messages, newBelow)) },
+                )
+            }
             }
             failedMessage?.let { message ->
                 ModalBottomSheet(
@@ -477,15 +596,66 @@ fun ChatScreen(
                 locationUrl = attachedLocation,
                 onClear = { attachedLocation = null },
             )
+            quoting?.let { quoted ->
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(quoted.senderName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            quoted.body.ifBlank { quoted.attachmentName ?: stringResource(R.string.chat_file) },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = { quoting = null }) {
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.close))
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box {
                     IconButton(onClick = { shareMenu = true }, enabled = vm.channel != null) {
-                        Icon(Icons.Filled.Place, contentDescription = stringResource(R.string.attach_location))
+                        Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.chat_composer_more))
                     }
                     DropdownMenu(expanded = shareMenu, onDismissRequest = { shareMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_quick_task)) },
+                            enabled = draft.isNotBlank(),
+                            onClick = {
+                                shareMenu = false
+                                vm.captureDraft(draft.trim(), asNote = false)
+                                draft = ""
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_quick_note)) },
+                            enabled = draft.isNotBlank(),
+                            onClick = {
+                                shareMenu = false
+                                vm.captureDraft(draft.trim(), asNote = true)
+                                draft = ""
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_send_image)) },
+                            onClick = {
+                                shareMenu = false
+                                imagePicker.launch("image/*")
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_send_file)) },
+                            onClick = {
+                                shareMenu = false
+                                filePicker.launch("*/*")
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.attach_location_chat)) },
                             onClick = {
@@ -540,7 +710,10 @@ fun ChatScreen(
                 }
                 OutlinedTextField(
                     value = draft,
-                    onValueChange = { draft = it },
+                    onValueChange = {
+                        draft = it
+                        vm.notifyTyping()
+                    },
                     modifier = Modifier.weight(1f),
                     placeholder = {
                         Text(
@@ -565,14 +738,29 @@ fun ChatScreen(
                     onClick = {
                         val text = draft
                         val location = attachedLocation
+                        val quote = quoting
                         draft = ""
                         attachedLocation = null
-                        vm.send(text, location)
+                        quoting = null
+                        vm.send(text, location, replyTo = quote)
                     },
                     enabled = (draft.isNotBlank() || !attachedLocation.isNullOrBlank()) && vm.channel != null,
                 ) {
                     Icon(Icons.Filled.Send, contentDescription = stringResource(R.string.send))
                 }
+            }
+            val lastMine = chatMessages.lastOrNull { it.senderId == myId }
+            if (
+                vm.channel?.kind.equals("DIRECT", true) &&
+                lastMine != null &&
+                vm.peerReadAt >= lastMine.createdAt
+            ) {
+                Text(
+                    stringResource(R.string.chat_seen),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
             }
         }
     }
@@ -597,6 +785,56 @@ fun ChatScreen(
         }
     }
 
+    if (channelSearch) {
+        EditorDialog(
+            title = stringResource(R.string.search),
+            onDismiss = { channelSearch = false },
+            onSave = { vm.searchInChannel(channelQuery) { channelHits = it } },
+            onDelete = null,
+        ) {
+            OutlinedField(channelQuery, { channelQuery = it }, stringResource(R.string.keyword))
+            channelHits.forEach { hit ->
+                TextButton(onClick = {
+                    channelSearch = false
+                    scope.launch {
+                        val index = chatMessages.indexOfFirst { it.id == hit.id }
+                        if (index >= 0) listState.animateScrollToItem(index)
+                    }
+                }) { Text(hit.body.ifBlank { hit.attachmentName.orEmpty() }.take(120)) }
+            }
+        }
+    }
+
+    editTarget?.let { target ->
+        LaunchedEffect(target.id) { editDraft = target.body }
+        EditorDialog(
+            title = stringResource(R.string.chat_edit),
+            onDismiss = { editTarget = null },
+            onSave = {
+                vm.editMessage(target, editDraft)
+                editTarget = null
+            },
+            onDelete = null,
+        ) {
+            OutlinedField(editDraft, { editDraft = it }, stringResource(R.string.chat_hint))
+        }
+    }
+
+    if (createWorkspaceChannel) {
+        EditorDialog(
+            title = stringResource(R.string.create_channel),
+            onDismiss = { createWorkspaceChannel = false },
+            onSave = {
+                vm.createChannel(newChannelName.trim(), isPrivate = false)
+                createWorkspaceChannel = false
+                newChannelName = ""
+            },
+            onDelete = null,
+        ) {
+            OutlinedField(newChannelName, { newChannelName = it }, stringResource(R.string.create_channel))
+        }
+    }
+
     if (newChat) {
         NewChatDialog(
             members = vm.members.filter { it.id != myId },
@@ -610,11 +848,12 @@ fun ChatScreen(
                 vm.openDirect(id)
                 scope.launch { drawerState.close() }
             },
-            onGroup = {
+            selfName = session?.user?.name.orEmpty(),
+            onGroup = { name ->
                 val ids = newChatPicks.toList()
                 newChat = false
                 newChatPicks = emptySet()
-                vm.openGroup("", ids)
+                vm.openGroup(name, ids)
                 scope.launch { drawerState.close() }
             },
             onFind = { name, report ->
@@ -627,6 +866,21 @@ fun ChatScreen(
             onDismiss = { newChat = false },
         )
     }
+
+    if (renamingGroup && vm.channel?.kind.equals("GROUP", true)) {
+        EditorDialog(
+            title = stringResource(R.string.group_name),
+            onDismiss = { renamingGroup = false },
+            onSave = {
+                vm.renameGroup(groupNameDraft.trim())
+                renamingGroup = false
+            },
+            onDelete = null,
+        ) {
+            OutlinedField(groupNameDraft, { groupNameDraft = it }, stringResource(R.string.group_name))
+            Text(stringResource(R.string.group_name_hint), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -634,12 +888,22 @@ fun ChatScreen(
 private fun ChatInbox(
     channels: List<ChannelDto>,
     latest: Map<String, MessageDto>,
+    myId: String?,
+    onlineIds: Set<String>,
+    unreadOf: (String) -> Int,
     onOpen: (ChannelDto) -> Unit,
     onNew: () -> Unit,
 ) {
     var filter by remember { mutableStateOf("") }
+    var workOnly by remember { mutableStateOf(false) }
     val shown = channels
         .filter { filter.isBlank() || it.name.contains(filter, ignoreCase = true) }
+        .filter { channel ->
+            if (!workOnly) true else {
+                val last = latest[channel.id]
+                last?.taskId != null || last?.noteId != null
+            }
+        }
         .sortedByDescending { latest[it.id]?.createdAt ?: 0L }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -662,16 +926,44 @@ private fun ChatInbox(
                 singleLine = true,
                 placeholder = { Text(stringResource(R.string.search)) },
             )
+            Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { workOnly = false }) {
+                    Text(
+                        stringResource(R.string.chat_tab_all),
+                        fontWeight = if (!workOnly) FontWeight.Bold else FontWeight.Normal,
+                        color = if (!workOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { workOnly = true }) {
+                    Text(
+                        stringResource(R.string.chat_tab_work),
+                        fontWeight = if (workOnly) FontWeight.Bold else FontWeight.Normal,
+                        color = if (workOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (shown.isEmpty()) {
                 Text(
-                    stringResource(R.string.chat_inbox_empty),
+                    stringResource(if (workOnly) R.string.chat_inbox_work_empty else R.string.chat_inbox_empty),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                 )
             }
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(shown, key = { it.id }) { channel ->
-                    InboxRow(channel, latest[channel.id], onClick = { onOpen(channel) })
+                    InboxRow(
+                        channel = channel,
+                        last = latest[channel.id],
+                        mine = latest[channel.id]?.senderId == myId,
+                        unread = unreadOf(channel.id),
+                        online = run {
+                            val last = latest[channel.id]
+                            val peer = last?.senderId?.takeIf { it != myId }
+                            (channel.kind.equals("DIRECT", true) || channel.kind.equals("DM", true)) &&
+                                peer != null && peer in onlineIds
+                        },
+                        onClick = { onOpen(channel) },
+                    )
                 }
             }
         }
@@ -679,7 +971,14 @@ private fun ChatInbox(
 }
 
 @Composable
-private fun InboxRow(channel: ChannelDto, last: MessageDto?, onClick: () -> Unit) {
+private fun InboxRow(
+    channel: ChannelDto,
+    last: MessageDto?,
+    mine: Boolean,
+    unread: Int,
+    online: Boolean = false,
+    onClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -688,6 +987,7 @@ private fun InboxRow(channel: ChannelDto, last: MessageDto?, onClick: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Box(contentAlignment = Alignment.BottomEnd) {
         Box(
             modifier = Modifier
                 .size(52.dp)
@@ -702,22 +1002,55 @@ private fun InboxRow(channel: ChannelDto, last: MessageDto?, onClick: () -> Unit
                 fontWeight = FontWeight.SemiBold,
             )
         }
+            if (online) {
+                Box(
+                    Modifier
+                        .size(12.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF22C55E))
+                        .border(2.dp, MaterialTheme.colorScheme.background, CircleShape),
+                )
+            }
+        }
         Column(Modifier.weight(1f)) {
             Text(channel.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
             Text(
-                last?.body?.replace('\n', ' ')?.ifBlank { null } ?: stringResource(R.string.chat_inbox_empty_line),
+                last?.let { message ->
+                    val body = message.body.replace('\n', ' ').ifBlank { stringResource(R.string.chat_inbox_empty_line) }
+                    if (mine) stringResource(R.string.chat_you_prefix, body) else {
+                        if (channel.kind.equals("DIRECT", true)) body else "${message.senderName}: $body"
+                    }
+                } ?: stringResource(R.string.chat_inbox_empty_line),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (unread > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (unread > 0) FontWeight.SemiBold else FontWeight.Normal,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        if (last != null) {
-            Text(
-                formatTime(last.createdAt),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (last != null) {
+                Text(
+                    formatTime(last.createdAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (unread > 0) {
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.error),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (unread > 99) "99+" else unread.toString(),
+                        color = MaterialTheme.colorScheme.onError,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
         }
     }
 }
@@ -727,13 +1060,19 @@ private fun NewChatDialog(
     members: List<MemberDto>,
     picked: Set<String>,
     onToggle: (String) -> Unit,
+    selfName: String,
     onOpen: (String) -> Unit,
-    onGroup: () -> Unit,
+    onGroup: (String) -> Unit,
     onFind: (String, (String) -> Unit) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
+    var groupName by remember { mutableStateOf("") }
     var findError by remember { mutableStateOf<String?>(null) }
+    val fallback = (listOf(selfName) + members.filter { it.id in picked }.map { it.name })
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(", ")
     val shown = members.filter {
         query.isBlank() || it.name.contains(query, true) || it.username.contains(query, true)
     }
@@ -790,7 +1129,16 @@ private fun NewChatDialog(
                     }
                 }
                 if (picked.size >= 2) {
-                    SoftPrimaryButton(text = stringResource(R.string.new_group), onClick = onGroup)
+                    OutlinedTextField(
+                        value = groupName,
+                        onValueChange = { groupName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.group_name)) },
+                        placeholder = { Text(fallback.ifBlank { stringResource(R.string.group_name) }) },
+                        supportingText = { Text(stringResource(R.string.group_name_hint)) },
+                    )
+                    SoftPrimaryButton(text = stringResource(R.string.new_group), onClick = { onGroup(groupName.trim()) })
                 }
             }
         }
@@ -807,6 +1155,7 @@ private fun ChatSidebar(
     onClose: () -> Unit,
     onSelect: (ChannelDto) -> Unit,
     onNewChat: () -> Unit,
+    onCreateChannel: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -837,6 +1186,12 @@ private fun ChatSidebar(
         ) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Text(stringResource(R.string.new_chat), modifier = Modifier.padding(start = 6.dp))
+        }
+        TextButton(
+            onClick = onCreateChannel,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        ) {
+            Text(stringResource(R.string.create_channel))
         }
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         LazyColumn(
@@ -954,11 +1309,14 @@ private fun MessageBubble(
     mine: Boolean,
     myId: String?,
     showName: Boolean,
+    showAvatar: Boolean,
     sending: Boolean,
     onFailedTap: (() -> Unit)?,
     onThread: (() -> Unit)?,
     onMakeTask: (() -> Unit)?,
     onMakeNote: (() -> Unit)?,
+    waitingToTask: Boolean = false,
+    onQuote: () -> Unit = {},
     timeReveal: Float,
     timeMax: Float,
     reactions: List<com.workhub.shared.ReactionDto>,
@@ -969,6 +1327,8 @@ private fun MessageBubble(
     onPin: () -> Unit,
     onStar: () -> Unit,
     onForward: (String) -> Unit,
+    onEdit: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
     task: TaskDto? = null,
     note: NoteDto? = null,
     modifier: Modifier = Modifier,
@@ -986,6 +1346,21 @@ private fun MessageBubble(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .pointerInput(message.id) {
+                var dragged = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dragged = 0f },
+                    onHorizontalDrag = { _, amount ->
+                        if (amount > 0) {
+                            dragged += amount
+                            if (dragged > 120f) {
+                                dragged = 0f
+                                onQuote()
+                            }
+                        }
+                    },
+                )
+            }
             .combinedClickable(
                 onClick = { onFailedTap?.invoke() },
                 onLongClick = { menu = true },
@@ -1016,9 +1391,12 @@ private fun MessageBubble(
                     )
                 }
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    if (!mine) {
+                        if (showAvatar) InitialsAvatar(message.senderName, 28.dp) else Spacer(Modifier.size(28.dp))
+                    }
                     if (sharedTask || sharedNote) {
                         EntityRailCard(
                             task = sharedTask,
@@ -1026,7 +1404,14 @@ private fun MessageBubble(
                             subtitle = task?.let { statusLabel(it.status) } ?: note?.body?.takeIf { it.isNotBlank() },
                             modifier = Modifier.widthIn(max = 260.dp),
                         )
-                    } else if (message.body.isNotBlank()) {
+                    } else if (message.deleted) {
+                        Text(
+                            stringResource(R.string.chat_recalled),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontStyle = FontStyle.Italic,
+                            modifier = Modifier.padding(4.dp),
+                        )
+                    } else if (message.body.isNotBlank() || !message.attachmentUrl.isNullOrBlank()) {
                         val bubbleColor = when {
                             failed -> MaterialTheme.colorScheme.errorContainer
                             mine -> MaterialTheme.colorScheme.primary
@@ -1052,7 +1437,38 @@ private fun MessageBubble(
                                 .background(color = bubbleColor, shape = RoundedCornerShape(18.dp))
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                         ) {
-                            Text(message.body, color = textColor)
+                            Column {
+                                if (!message.replyToBody.isNullOrBlank()) {
+                                    Text(
+                                        listOfNotNull(message.replyToName, message.replyToBody).joinToString(": "),
+                                        color = textColor.copy(alpha = 0.75f),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 6.dp),
+                                    )
+                                }
+                                message.attachmentUrl?.takeIf { message.attachmentKind == "IMAGE" }?.let { source ->
+                                    coil.compose.AsyncImage(
+                                        model = if (source.startsWith("http") || source.startsWith("/")) source else java.io.File(source),
+                                        contentDescription = message.attachmentName,
+                                        modifier = Modifier.widthIn(max = 220.dp).heightIn(max = 220.dp),
+                                    )
+                                }
+                                if (message.attachmentKind == "FILE") {
+                                    Text(message.attachmentName ?: stringResource(R.string.chat_file), color = textColor)
+                                }
+                                if (message.body.isNotBlank()) Text(message.body, color = textColor)
+                                message.editedAt?.let {
+                                    Text(
+                                        stringResource(R.string.chat_edited),
+                                        color = textColor.copy(alpha = 0.65f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
                         }
                     }
                     if (!mine) {
@@ -1124,7 +1540,9 @@ private fun MessageBubble(
                     menu = false
                     emojiBar = false
                 },
-                onReply = onThread?.let { action -> { menu = false; action() } },
+                onReply = { menu = false; onQuote() },
+                onThread = onThread?.let { action -> { menu = false; action() } },
+                waitingToTask = waitingToTask,
                 onForward = { forwarding = true },
                 onForwardTo = { id ->
                     menu = false
@@ -1147,6 +1565,8 @@ private fun MessageBubble(
                 onNote = onMakeNote?.let { action -> { menu = false; action() } },
                 onPin = { menu = false; onPin() },
                 onStar = { menu = false; onStar() },
+                onEdit = onEdit?.let { action -> { menu = false; action() } },
+                onDelete = onDelete?.let { action -> { menu = false; action() } },
                 pinned = pinned,
                 starred = starred,
             )
@@ -1187,6 +1607,8 @@ private fun MessageActions(
     onDismiss: () -> Unit,
     onReact: (String) -> Unit,
     onReply: (() -> Unit)?,
+    onThread: (() -> Unit)? = null,
+    waitingToTask: Boolean = false,
     onForward: () -> Unit,
     onForwardTo: (String) -> Unit,
     onShare: () -> Unit,
@@ -1195,6 +1617,8 @@ private fun MessageActions(
     onNote: (() -> Unit)?,
     onPin: () -> Unit,
     onStar: () -> Unit,
+    onEdit: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1246,6 +1670,7 @@ private fun MessageActions(
                 } else {
                     val actions = listOfNotNull(
                         onReply?.let { BubbleAction(stringResource(R.string.chat_reply), Icons.Outlined.Reply, it) },
+                        onThread?.let { BubbleAction(stringResource(R.string.chat_thread), Icons.Outlined.Reply, it) },
                         BubbleAction(stringResource(R.string.chat_forward), Icons.Outlined.Shortcut, onForward),
                         BubbleAction(stringResource(R.string.chat_share), Icons.Filled.Share, onShare),
                         BubbleAction(stringResource(R.string.chat_copy_text), Icons.Filled.ContentCopy, onCopy),
@@ -1253,8 +1678,18 @@ private fun MessageActions(
                         onNote?.let { BubbleAction(stringResource(R.string.quick_create_note), Icons.Outlined.EditNote, it) },
                         BubbleAction(stringResource(R.string.chat_pin), Icons.Filled.PushPin, onPin, pinned),
                         BubbleAction(stringResource(R.string.chat_star), if (starred) Icons.Filled.Star else Icons.Outlined.StarBorder, onStar, starred),
+                        onEdit?.let { BubbleAction(stringResource(R.string.chat_edit), Icons.Outlined.Edit, it) },
+                        onDelete?.let { BubbleAction(stringResource(R.string.chat_delete), Icons.Outlined.Delete, it) },
                     )
                     Column(Modifier.padding(8.dp)) {
+                        if (waitingToTask) {
+                            Text(
+                                stringResource(R.string.chat_wait_task),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(8.dp),
+                            )
+                        }
                         actions.chunked(4).forEach { row ->
                             Row(Modifier.fillMaxWidth()) {
                                 row.forEach { action ->
@@ -1321,6 +1756,8 @@ class ChatViewModel(
         chat.failedIds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
     val latest: StateFlow<Map<String, MessageDto>> =
         chat.latest.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    val peeks: StateFlow<List<com.workhub.app.data.local.MessagePeek>> =
+        chat.peeks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var members by mutableStateOf<List<MemberDto>>(emptyList())
         private set
     var loading by mutableStateOf(true)
@@ -1331,14 +1768,53 @@ class ChatViewModel(
         private set
     var banner by mutableStateOf<String?>(null)
         private set
+    var typingLabel by mutableStateOf<String?>(null)
+        private set
+    var peerReadAt by mutableStateOf(0L)
+        private set
+    val onlineIds = MutableStateFlow<Set<String>>(emptySet())
+    var loadingOlder by mutableStateOf(false)
+        private set
+    var canLoadOlder by mutableStateOf(true)
+        private set
 
     init {
         refresh()
         viewModelScope.launch {
             realtime.connected.collect { connected ->
-                // Pull what was missed while the socket was down.
                 if (connected && !live) refreshQuiet()
                 live = connected
+            }
+        }
+        var typingClear: kotlinx.coroutines.Job? = null
+        viewModelScope.launch {
+            realtime.events.collect { event ->
+                when (event.type) {
+                    "typing" -> {
+                        if (event.channelId != channel?.id || event.userId.isNullOrBlank()) return@collect
+                        typingClear?.cancel()
+                        typingLabel = event.userName?.let { "$it…" } ?: "…"
+                        typingClear = launch {
+                            kotlinx.coroutines.delay(3_000)
+                            typingLabel = null
+                        }
+                    }
+                    "read" -> {
+                        if (event.channelId != channel?.id) return@collect
+                        event.lastReadAt?.let { peerReadAt = maxOf(peerReadAt, it) }
+                    }
+                    "presence" -> {
+                        val id = event.userId ?: return@collect
+                        val next = onlineIds.value.toMutableSet()
+                        if (event.online == true) next.add(id) else next.remove(id)
+                        onlineIds.value = next
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching {
+                onlineIds.value = api.onlineUserIds().toSet()
             }
         }
     }
@@ -1358,7 +1834,7 @@ class ChatViewModel(
                 members = api.members()
                 val selected = channel?.let { current -> list.firstOrNull { it.id == current.id } }
                 select(selected, thread?.takeIf { selected != null && selected.id == channel?.id })
-                selected?.let { chat.refreshMessages(it.id, thread?.id) }
+                selected?.let { chat.refreshMessages(it.id, thread?.id, catchUp = false) }
             } catch (e: Exception) {
                 // Offline with a cached history is normal: keep showing it.
                 if (channels.value.isEmpty()) error = e.userMessage()
@@ -1374,7 +1850,68 @@ class ChatViewModel(
         val root = thread?.id
         viewModelScope.launch {
             runCatching { chat.refreshChannels() }
-            if (selected != null) runCatching { chat.refreshMessages(selected.id, root) }
+            if (selected != null) runCatching { chat.refreshMessages(selected.id, root, catchUp = true) }
+        }
+    }
+
+    fun loadOlder() {
+        val selected = channel ?: return
+        val root = thread?.id
+        val oldest = messages.value.minOfOrNull { it.createdAt } ?: return
+        if (loadingOlder) return
+        viewModelScope.launch {
+            loadingOlder = true
+            try {
+                val more = chat.loadOlderMessages(selected.id, root, oldest)
+                canLoadOlder = more
+            } finally {
+                loadingOlder = false
+            }
+        }
+    }
+
+    fun notifyTyping() {
+        val id = channel?.id ?: return
+        realtime.sendTyping(id)
+    }
+
+    fun publishRead(channelId: String, at: Long, messageId: String?) {
+        realtime.sendRead(channelId, at, messageId)
+        viewModelScope.launch {
+            runCatching { api.markChannelRead(channelId, at, messageId) }
+        }
+    }
+
+    fun editMessage(message: MessageDto, body: String) {
+        viewModelScope.launch {
+            try {
+                val saved = api.editMessage(message.channelId, message.id, body)
+                chat.applyEdit(saved)
+            } catch (e: Exception) {
+                error = e.userMessage()
+            }
+        }
+    }
+
+    fun deleteMessage(message: MessageDto) {
+        viewModelScope.launch {
+            try {
+                val saved = api.deleteMessage(message.channelId, message.id)
+                chat.applyDelete(saved)
+            } catch (e: Exception) {
+                error = e.userMessage()
+            }
+        }
+    }
+
+    fun searchInChannel(query: String, onResult: (List<MessageDto>) -> Unit) {
+        val selected = channel ?: return
+        viewModelScope.launch {
+            try {
+                onResult(api.messages(selected.id, thread?.id, query = query, limit = 40))
+            } catch (e: Exception) {
+                error = e.userMessage()
+            }
         }
     }
 
@@ -1456,6 +1993,19 @@ class ChatViewModel(
         }
     }
 
+    fun renameGroup(name: String) {
+        val current = channel ?: return
+        viewModelScope.launch {
+            try {
+                val saved = api.renameChannel(current.id, name)
+                chat.refreshChannels()
+                select(saved, thread)
+            } catch (e: Exception) {
+                error = e.userMessage()
+            }
+        }
+    }
+
     fun openGroup(name: String, memberIds: List<String>) {
         viewModelScope.launch {
             try {
@@ -1468,14 +2018,37 @@ class ChatViewModel(
         }
     }
 
+    fun captureDraft(body: String, asNote: Boolean) {
+        viewModelScope.launch {
+            banner = null
+            error = null
+            try {
+                val title = messageTitle(body)
+                if (asNote) {
+                    offline.saveNote(null, com.workhub.shared.NoteWrite(title = title, body = body))
+                    banner = "note"
+                } else {
+                    offline.saveTask(null, com.workhub.shared.TaskWrite(title = title, description = body))
+                    banner = "task"
+                }
+            } catch (e: Exception) {
+                error = e.userMessage()
+            }
+        }
+    }
+
     fun makeTask(message: MessageDto) {
         viewModelScope.launch {
             banner = null
             error = null
             try {
-                val title = messageTitle(message.body)
-                offline.saveTask(null, com.workhub.shared.TaskWrite(title = title, description = message.body))
-                banner = "task"
+                runCatching { api.messageToTask(message.channelId, message.id) }
+                    .onSuccess { banner = "task" }
+                    .onFailure {
+                        val title = messageTitle(message.body)
+                        offline.saveTask(null, com.workhub.shared.TaskWrite(title = title, description = message.body))
+                        banner = "task"
+                    }
             } catch (e: Exception) {
                 error = e.userMessage()
             }
@@ -1525,13 +2098,31 @@ class ChatViewModel(
         }
     }
 
-    fun send(body: String, locationUrl: String? = null) {
+    fun send(
+        body: String,
+        locationUrl: String? = null,
+        localPath: String? = null,
+        attachmentName: String? = null,
+        attachmentKind: String? = null,
+        replyTo: MessageDto? = null,
+    ) {
         val selected = channel ?: return
-        if (body.isBlank() && locationUrl.isNullOrBlank()) return
+        if (body.isBlank() && locationUrl.isNullOrBlank() && localPath.isNullOrBlank()) return
         val root = thread?.id
         viewModelScope.launch {
             try {
-                chat.send(selected.id, body, root, locationUrl)
+                chat.send(
+                    selected.id,
+                    body,
+                    root,
+                    locationUrl,
+                    localPath = localPath,
+                    attachmentName = attachmentName,
+                    attachmentKind = attachmentKind,
+                    replyToId = replyTo?.id,
+                    replyToName = replyTo?.senderName,
+                    replyToBody = replyTo?.body?.ifBlank { replyTo.attachmentName },
+                )
             } catch (e: Exception) {
                 error = e.userMessage()
             }
@@ -1545,6 +2136,22 @@ class ChatViewModel(
     fun discard(message: MessageDto) {
         viewModelScope.launch { chat.discard(message.id) }
     }
+}
+
+private fun copyOutgoing(context: android.content.Context, uri: android.net.Uri): java.io.File? {
+    val resolver = context.contentResolver
+    val rawName = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    }
+    val ext = rawName?.substringAfterLast('.', "")?.lowercase()?.filter { it.isLetterOrDigit() }?.ifBlank { null } ?: "bin"
+    val dir = java.io.File(context.filesDir, "outgoing").apply { mkdirs() }
+    val dest = java.io.File(dir, "${java.util.UUID.randomUUID()}.$ext")
+    return runCatching {
+        resolver.openInputStream(uri)?.use { input ->
+            dest.outputStream().use { input.copyTo(it) }
+        } ?: return null
+        dest
+    }.getOrNull()
 }
 
 private fun messageTitle(body: String): String =

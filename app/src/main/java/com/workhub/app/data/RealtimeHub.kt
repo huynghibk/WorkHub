@@ -2,6 +2,7 @@ package com.workhub.app.data
 
 import com.workhub.shared.WsEvent
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,6 +26,7 @@ class RealtimeHub(private val api: WorkHubApi) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loop: Job? = null
     private val running = AtomicBoolean(false)
+    private val outbound = AtomicReference<suspend (WsEvent) -> Unit>({})
 
     private val _events = MutableSharedFlow<WsEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<WsEvent> = _events.asSharedFlow()
@@ -32,20 +34,48 @@ class RealtimeHub(private val api: WorkHubApi) {
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
+    fun send(event: WsEvent) {
+        scope.launch { runCatching { outbound.get()(event) } }
+    }
+
+    fun sendTyping(channelId: String) {
+        send(WsEvent(type = "typing", channelId = channelId))
+    }
+
+    fun sendRead(channelId: String, lastReadAt: Long, lastMessageId: String?) {
+        send(
+            WsEvent(
+                type = "read",
+                channelId = channelId,
+                lastReadAt = lastReadAt,
+                lastMessageId = lastMessageId,
+            ),
+        )
+    }
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         loop = scope.launch {
+            var backoffMs = 500L
             while (isActive && running.get()) {
                 try {
                     _connected.value = true
-                    api.listen { event -> _events.emit(event) }
+                    api.openRealtimeSession(
+                        onConnected = { send -> outbound.set(send) },
+                        onEvent = { event -> _events.emit(event) },
+                    )
                     _connected.value = false
+                    backoffMs = 500L
                 } catch (error: kotlinx.coroutines.CancellationException) {
                     _connected.value = false
                     throw error
                 } catch (_: Exception) {
                     _connected.value = false
-                    if (running.get()) delay(2_000)
+                    outbound.set({})
+                    if (running.get()) {
+                        delay(backoffMs)
+                        backoffMs = (backoffMs * 2).coerceAtMost(8_000)
+                    }
                 }
             }
         }
@@ -60,6 +90,7 @@ class RealtimeHub(private val api: WorkHubApi) {
         running.set(false)
         loop?.cancel()
         loop = null
+        outbound.set({})
         _connected.value = false
     }
 }

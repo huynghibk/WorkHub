@@ -2,6 +2,7 @@ package com.workhub.app.data
 
 import com.workhub.app.data.local.ChannelEntity
 import com.workhub.app.data.local.MessageEntity
+import com.workhub.app.data.local.MessagePeek
 import com.workhub.app.data.local.WorkHubDb
 import com.workhub.shared.ChannelDto
 import com.workhub.shared.MessageDto
@@ -65,6 +66,18 @@ class ChatStore(
             }
         }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val peeks: Flow<List<MessagePeek>> =
+        session.state.map { it.workspace?.id }.distinctUntilChanged().flatMapLatest { ws ->
+            if (ws == null) {
+                flowOf(emptyList())
+            } else {
+                db.chat().observeRoots(ws).map { rows ->
+                    rows.map { row -> MessagePeek(row.channelId, row.createdAt, decode(row.payload).senderId) }
+                }
+            }
+        }
+
     /** Ids of messages still waiting to be uploaded (shown with a "sending" clock). */
     val pendingIds: Flow<Set<String>> = db.chat().observePendingIds().map { it.toSet() }
 
@@ -86,11 +99,42 @@ class ChatStore(
         return list
     }
 
-    suspend fun refreshMessages(channelId: String, parentId: String?) {
+    suspend fun refreshMessages(channelId: String, parentId: String?, catchUp: Boolean = false) {
         val ws = session.current().workspace?.id ?: return
-        val list = api.messages(channelId, parentId)
+        val after = if (catchUp) db.chat().maxCreatedAt(channelId, parentId) else null
+        val list = if (after != null && after > 0) {
+            api.messages(channelId, parentId, after = after, limit = 200)
+        } else {
+            api.messages(channelId, parentId, limit = 50)
+        }
         val pending = db.chat().pendingIds().toSet()
         db.chat().upsertAll(list.filter { it.id !in pending }.map { entity(ws, it) })
+    }
+
+    suspend fun loadOlderMessages(channelId: String, parentId: String?, before: Long): Boolean {
+        val ws = session.current().workspace?.id ?: return false
+        val list = api.messages(channelId, parentId, before = before, limit = 50)
+        if (list.isEmpty()) return false
+        val pending = db.chat().pendingIds().toSet()
+        db.chat().upsertAll(list.filter { it.id !in pending }.map { entity(ws, it) })
+        return list.size >= 50
+    }
+
+    suspend fun applyEdit(message: MessageDto) = apply(message)
+
+    suspend fun applyDelete(message: MessageDto) = apply(message)
+
+    private suspend fun uploadAttachment(write: MessageWrite): MessageWrite {
+        val path = write.localPath?.takeIf { it.isNotBlank() } ?: return write.copy(localPath = null)
+        val file = java.io.File(path)
+        if (!file.exists()) throw ApiException("Không còn tệp trên máy", 400)
+        val uploaded = api.upload(file, write.attachmentName ?: file.name)
+        return write.copy(
+            localPath = null,
+            attachmentUrl = uploaded.url,
+            attachmentName = uploaded.name,
+            attachmentKind = uploaded.kind,
+        )
     }
 
     suspend fun send(
@@ -100,11 +144,25 @@ class ChatStore(
         locationUrl: String?,
         taskId: String? = null,
         noteId: String? = null,
+        localPath: String? = null,
+        attachmentName: String? = null,
+        attachmentKind: String? = null,
+        replyToId: String? = null,
+        replyToName: String? = null,
+        replyToBody: String? = null,
     ) {
         val current = session.current()
         val ws = current.workspace?.id ?: throw ApiException("Hãy chọn workspace")
         val user = current.user ?: throw ApiException("Bạn cần đăng nhập lại")
-        val write = MessageWrite(body.trim(), parentId, locationUrl, taskId, noteId)
+        val write = MessageWrite(
+            body.trim(), parentId, locationUrl, taskId, noteId,
+            attachmentName = attachmentName,
+            attachmentKind = attachmentKind,
+            replyToId = replyToId,
+            replyToName = replyToName,
+            replyToBody = replyToBody,
+            localPath = localPath,
+        )
         val message = MessageDto(
             id = UUID.randomUUID().toString(),
             channelId = channelId,
@@ -116,6 +174,12 @@ class ChatStore(
             locationUrl = locationUrl,
             taskId = taskId,
             noteId = noteId,
+            attachmentUrl = localPath,
+            attachmentName = attachmentName,
+            attachmentKind = attachmentKind,
+            replyToId = replyToId,
+            replyToName = replyToName,
+            replyToBody = replyToBody,
         )
         db.chat().upsert(
             entity(ws, message).copy(
@@ -134,13 +198,14 @@ class ChatStore(
             // The server rejects a share whose task/note it has not received yet.
             if (write.taskId?.let { db.tasks().get(it)?.syncPending } == true) continue
             if (write.noteId?.let { db.notes().get(it)?.syncPending } == true) continue
+            val ready = uploadAttachment(write)
             try {
                 val saved = try {
-                    api.putMessage(row.channelId, row.id, write, row.workspaceId)
+                    api.putMessage(row.channelId, row.id, ready, row.workspaceId)
                 } catch (e: ApiException) {
                     // Servers that predate the idempotent route still accept a normal send.
                     if (e.status != 404) throw e
-                    api.postMessage(row.channelId, write, row.workspaceId)
+                    api.postMessage(row.channelId, ready, row.workspaceId)
                 }
                 if (saved.id == row.id) {
                     db.chat().markSynced(row.id, sent, json.encodeToString(MessageDto.serializer(), saved), saved.createdAt)

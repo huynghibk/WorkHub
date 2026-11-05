@@ -13,8 +13,13 @@ import io.ktor.http.HttpStatusCode
 import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.Op
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.greater
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
@@ -198,38 +203,89 @@ fun requireChannel(companyId: String, channelId: String) {
     }
 }
 
-fun messageRows(channelId: String, parentId: String? = null): List<MessageDto> {
-    val rows = Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
-        .select {
-            val inChannel = (Messages.channelId eq channelId) and alive(Messages.deletedAt)
-            if (parentId == null) inChannel and Messages.parentId.isNull() else inChannel and (Messages.parentId eq parentId)
+fun messageRows(
+    channelId: String,
+    parentId: String? = null,
+    before: Long? = null,
+    after: Long? = null,
+    limit: Int = 50,
+    query: String? = null,
+): List<MessageDto> {
+    val cap = limit.coerceIn(1, 200)
+    val trimmedQuery = query?.trim()?.takeIf { it.length >= 2 }
+    val filter: Op<Boolean> = run {
+        var clause = Messages.channelId eq channelId
+        clause = if (parentId == null) clause and Messages.parentId.isNull() else clause and (Messages.parentId eq parentId)
+        before?.let { clause = clause and (Messages.createdAt less it) }
+        after?.let { clause = clause and (Messages.createdAt greater it) }
+        trimmedQuery?.let { q -> clause = clause and (Messages.body like "%$q%") }
+        clause
+    }
+    val rows = when {
+        before != null -> {
+            Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
+                .select { filter }
+                .orderBy(Messages.createdAt to SortOrder.DESC)
+                .limit(cap)
+                .toList()
+                .asReversed()
         }
-        .orderBy(Messages.createdAt to SortOrder.DESC)
-        .limit(200)
-        .toList()
+        after != null -> {
+            Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
+                .select { filter }
+                .orderBy(Messages.createdAt to SortOrder.ASC)
+                .limit(cap)
+                .toList()
+        }
+        else -> {
+            Messages.join(Users, JoinType.INNER, Messages.senderId, Users.id)
+                .select { filter }
+                .orderBy(Messages.createdAt to SortOrder.DESC)
+                .limit(cap)
+                .toList()
+                .asReversed()
+        }
+    }
     val reactions = reactionsFor(rows.map { it[Messages.id] })
-    return rows.map { row ->
-        val id = row[Messages.id]
-        val replies = if (parentId == null) {
-            Messages.select { Messages.parentId eq id }.count().toInt()
-        } else {
-            0
-        }
-        MessageDto(
-            id = id,
-            channelId = row[Messages.channelId],
-            senderId = row[Messages.senderId],
-            senderName = row[Users.name],
-            body = row[Messages.body],
-            createdAt = row[Messages.createdAt],
-            parentId = row[Messages.parentId],
-            replyCount = replies,
-            locationUrl = row[Messages.locationUrl],
-            taskId = row[Messages.taskId],
-            noteId = row[Messages.noteId],
-            reactions = reactions[id].orEmpty(),
-        )
-    }.reversed()
+    return rows.map { row -> messageDtoFromRow(row, parentId, reactions) }
+}
+
+private fun messageDtoFromRow(
+    row: org.jetbrains.exposed.sql.ResultRow,
+    parentId: String?,
+    reactions: Map<String, List<com.workhub.shared.ReactionDto>>,
+): MessageDto {
+    val id = row[Messages.id]
+    val deleted = row[Messages.deletedAt] != null
+    val created = row[Messages.createdAt]
+    val updated = row[Messages.updatedAt]
+    val replies = if (parentId == null) {
+        Messages.select { Messages.parentId eq id }.count().toInt()
+    } else {
+        0
+    }
+    return MessageDto(
+        id = id,
+        channelId = row[Messages.channelId],
+        senderId = row[Messages.senderId],
+        senderName = row[Users.name],
+        body = if (deleted) "" else row[Messages.body],
+        createdAt = created,
+        parentId = row[Messages.parentId],
+        replyCount = replies,
+        locationUrl = row[Messages.locationUrl],
+        taskId = row[Messages.taskId],
+        noteId = row[Messages.noteId],
+        reactions = reactions[id].orEmpty(),
+        attachmentUrl = if (deleted) null else row[Messages.attachmentUrl],
+        attachmentName = if (deleted) null else row[Messages.attachmentName],
+        attachmentKind = if (deleted) null else row[Messages.attachmentKind],
+        replyToId = row[Messages.replyToId],
+        replyToName = row[Messages.replyToName],
+        replyToBody = row[Messages.replyToBody],
+        editedAt = if (!deleted && updated > created + 500) updated else null,
+        deleted = deleted,
+    )
 }
 
 fun reactionsFor(messageIds: List<String>): Map<String, List<ReactionDto>> {

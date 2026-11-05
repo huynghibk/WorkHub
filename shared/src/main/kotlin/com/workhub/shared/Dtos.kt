@@ -276,7 +276,38 @@ data class MessageDto(
     val taskId: String? = null,
     val noteId: String? = null,
     val reactions: List<ReactionDto> = emptyList(),
+    val attachmentUrl: String? = null,
+    val attachmentName: String? = null,
+    /** IMAGE or FILE. */
+    val attachmentKind: String? = null,
+    val replyToId: String? = null,
+    val replyToName: String? = null,
+    val replyToBody: String? = null,
+    val editedAt: Long? = null,
+    val deleted: Boolean = false,
 )
+
+@Serializable
+data class MessageEdit(val body: String)
+
+@Serializable
+data class ChannelReadWrite(
+    val lastReadAt: Long,
+    val lastMessageId: String? = null,
+)
+
+@Serializable
+data class ChannelReadDto(
+    val channelId: String,
+    val lastReadAt: Long,
+    val lastMessageId: String? = null,
+)
+
+@Serializable
+data class PushTokenWrite(val token: String, val platform: String = "android")
+
+@Serializable
+data class PinWrite(val pinned: Boolean = true)
 
 @Serializable
 data class ReactionDto(val userId: String, val emoji: String)
@@ -299,6 +330,21 @@ data class MessageWrite(
     val locationUrl: String? = null,
     val taskId: String? = null,
     val noteId: String? = null,
+    val attachmentUrl: String? = null,
+    val attachmentName: String? = null,
+    val attachmentKind: String? = null,
+    val replyToId: String? = null,
+    val replyToName: String? = null,
+    val replyToBody: String? = null,
+    /** Client-only path. Stripped before the message is sent. */
+    val localPath: String? = null,
+)
+
+@Serializable
+data class UploadResult(
+    val url: String,
+    val name: String,
+    val kind: String,
 )
 
 @Serializable
@@ -317,7 +363,17 @@ data class WsEvent(
     val reaction: ReactionEvent? = null,
     /** type = channel. A new or updated conversation for this user. */
     val channel: ChannelDto? = null,
+    /** Realtime control + presence (typing, read, ping). */
+    val channelId: String? = null,
+    val userId: String? = null,
+    val userName: String? = null,
+    val lastReadAt: Long? = null,
+    val lastMessageId: String? = null,
+    val online: Boolean? = null,
 )
+
+/** Strip client-only fields before HTTP. */
+fun MessageWrite.forServer(): MessageWrite = copy(localPath = null)
 
 @Serializable
 data class ErrorResponse(

@@ -40,6 +40,11 @@ object DatabaseFactory {
                 ChannelMembers,
                 Messages,
                 MessageReactions,
+                ChannelReads,
+                MessageMentions,
+                MessagePins,
+                ChannelMutes,
+                PushTokens,
                 Notifications,
                 Spaces,
                 SpaceMembers,
@@ -381,6 +386,40 @@ object MessageReactions : Table("message_reactions") {
     override val primaryKey = PrimaryKey(messageId, userId)
 }
 
+object ChannelReads : Table("channel_reads") {
+    val channelId = varchar("channel_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val lastReadAt = long("last_read_at")
+    val lastMessageId = varchar("last_message_id", ID_LEN).nullable()
+    override val primaryKey = PrimaryKey(channelId, userId)
+}
+
+object MessageMentions : Table("message_mentions") {
+    val messageId = varchar("message_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    override val primaryKey = PrimaryKey(messageId, userId)
+}
+
+object MessagePins : Table("message_pins") {
+    val messageId = varchar("message_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    val channelId = varchar("channel_id", ID_LEN).index()
+    override val primaryKey = PrimaryKey(messageId, userId)
+}
+
+object ChannelMutes : Table("channel_mutes") {
+    val channelId = varchar("channel_id", ID_LEN)
+    val userId = varchar("user_id", ID_LEN)
+    override val primaryKey = PrimaryKey(channelId, userId)
+}
+
+object PushTokens : Table("push_tokens") {
+    val userId = varchar("user_id", ID_LEN)
+    val token = varchar("token", 512)
+    val platform = varchar("platform", 16)
+    override val primaryKey = PrimaryKey(userId, token)
+}
+
 object Messages : Table("messages") {
     val id = varchar("id", ID_LEN)
     val channelId = varchar("channel_id", ID_LEN).index()
@@ -390,6 +429,12 @@ object Messages : Table("messages") {
     val locationUrl = varchar("location_url", URL_LEN).nullable()
     val taskId = varchar("task_id", ID_LEN).nullable()
     val noteId = varchar("note_id", ID_LEN).nullable()
+    val attachmentUrl = varchar("attachment_url", URL_LEN).nullable()
+    val attachmentName = varchar("attachment_name", 200).nullable()
+    val attachmentKind = varchar("attachment_kind", 16).nullable()
+    val replyToId = varchar("reply_to_id", ID_LEN).nullable()
+    val replyToName = varchar("reply_to_name", 80).nullable()
+    val replyToBody = varchar("reply_to_body", 200).nullable()
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()

@@ -154,9 +154,15 @@ class AppGraph private constructor(context: Context) {
     }
 
     init {
+        val pushRegistrar = PushRegistrar(appContext, api)
         scope.launch {
             session.purgeLegacyPassword()
             chat.pruneOlderThan(System.currentTimeMillis() - CHAT_CACHE_DAYS * 24 * 60 * 60 * 1000)
+        }
+        scope.launch {
+            session.state.collect { state ->
+                if (state.token != null) runCatching { pushRegistrar.registerIfNeeded() }
+            }
         }
         scope.launch {
             realtime.events.collect { event -> runCatching { offline.applyEvent(event) } }
@@ -182,7 +188,7 @@ class AppGraph private constructor(context: Context) {
     }
 
     companion object {
-        private const val CHAT_CACHE_DAYS = 30L
+        private const val CHAT_CACHE_DAYS = 365L
 
         @Volatile
         private var instance: AppGraph? = null

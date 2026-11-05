@@ -14,6 +14,12 @@ import androidx.room.Upsert
 import com.workhub.app.BuildConfig
 import kotlinx.coroutines.flow.Flow
 
+data class MessagePeek(
+    val channelId: String,
+    val createdAt: Long,
+    val senderId: String,
+)
+
 /**
  * Local copy of a task. [payload] is the last known TaskDto (JSON); [pendingWrite] is the
  * TaskWrite (JSON) still waiting to be uploaded while [syncPending] is true.
@@ -114,6 +120,9 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun get(id: String): MessageEntity?
+
+    @Query("SELECT MAX(createdAt) FROM messages WHERE channelId = :channelId AND parentId IS :parentId")
+    suspend fun maxCreatedAt(channelId: String, parentId: String?): Long?
 
     /** Oldest first so a thread root is uploaded before its replies. */
     @Query("SELECT * FROM messages WHERE syncPending = 1 ORDER BY createdAt")

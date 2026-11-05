@@ -63,6 +63,7 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
+import io.ktor.server.http.content.staticFiles
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
@@ -73,6 +74,7 @@ import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
+import io.ktor.websocket.readText
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
@@ -165,6 +167,10 @@ fun Application.module() {
         }
         get("/healthz") {
             call.respondText("ok", ContentType.Text.Plain)
+        }
+        staticFiles("/uploads", uploadDirectory())
+        authenticate("auth-jwt") {
+            post("/upload") { receiveUpload(call) }
         }
         post("/auth/register") {
             val response = Repository.register(call.receive())
@@ -318,13 +324,68 @@ fun Application.module() {
                     val created = Repository.createChannel(call.companyId(), call.userId(), call.receive())
                     call.respond(HttpStatusCode.Created, created)
                 }
+                put("/{id}/name") {
+                    val saved = Repository.renameChannel(
+                        call.companyId(),
+                        call.userId(),
+                        call.memberRole(),
+                        call.channelId(),
+                        call.receive<ChannelWrite>().name,
+                    )
+                    Repository.announceChannel(call.companyId(), saved.id)
+                    call.respond(saved)
+                }
                 post("/{id}/members") {
                     val memberId = call.receive<MemberAdd>().userId
                     Repository.addChannelMember(call.companyId(), call.userId(), call.memberRole(), call.channelId(), memberId)
                     call.respond(HttpStatusCode.NoContent)
                 }
+                get("/read-states") {
+                    call.respond(Repository.channelReadStates(call.companyId(), call.userId()))
+                }
                 get("/{id}/messages") {
-                    call.respond(Repository.messages(call.companyId(), call.userId(), call.memberRole(), call.channelId(), call.request.queryParameters["parent"]))
+                    val q = call.request.queryParameters
+                    call.respond(
+                        Repository.messages(
+                            call.companyId(),
+                            call.userId(),
+                            call.memberRole(),
+                            call.channelId(),
+                            q["parent"],
+                            q["before"]?.toLongOrNull(),
+                            q["after"]?.toLongOrNull(),
+                            q["limit"]?.toIntOrNull() ?: 50,
+                            q["q"],
+                        ),
+                    )
+                }
+                post("/{id}/read") {
+                    val body = call.receive<com.workhub.shared.ChannelReadWrite>()
+                    Repository.markChannelRead(
+                        call.companyId(),
+                        call.userId(),
+                        call.channelId(),
+                        body.lastReadAt,
+                        body.lastMessageId,
+                    )
+                    call.respond(HttpStatusCode.NoContent)
+                }
+                post("/{id}/leave") {
+                    Repository.leaveChannel(call.companyId(), call.userId(), call.memberRole(), call.channelId())
+                    call.respond(HttpStatusCode.NoContent)
+                }
+                put("/{id}/mute") {
+                    Repository.setChannelMuted(call.userId(), call.channelId(), muted = true)
+                    call.respond(HttpStatusCode.NoContent)
+                }
+                delete("/{id}/mute") {
+                    Repository.setChannelMuted(call.userId(), call.channelId(), muted = false)
+                    call.respond(HttpStatusCode.NoContent)
+                }
+                delete("/{id}/members/{memberId}") {
+                    val memberId = call.parameters["memberId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu thành viên")
+                    Repository.removeChannelMember(call.companyId(), call.userId(), call.memberRole(), call.channelId(), memberId)
+                    call.respond(HttpStatusCode.NoContent)
                 }
                 post("/{id}/messages") {
                     val body = call.receive<MessageWrite>()
@@ -333,11 +394,7 @@ fun Application.module() {
                         call.userId(),
                         call.memberRole(),
                         call.channelId(),
-                        body.body,
-                        body.parentId,
-                        body.locationUrl,
-                        taskId = body.taskId,
-                        noteId = body.noteId,
+                        body,
                     )
                     fanout(call.companyId(), call.channelId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
@@ -355,12 +412,8 @@ fun Application.module() {
                         call.userId(),
                         call.memberRole(),
                         call.channelId(),
-                        body.body,
-                        body.parentId,
-                        body.locationUrl,
+                        body,
                         requireClientId(messageId),
-                        taskId = body.taskId,
-                        noteId = body.noteId,
                     )
                     fanout(call.companyId(), call.channelId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
@@ -392,6 +445,48 @@ fun Application.module() {
                         throw AppException(HttpStatusCode.InternalServerError, detail ?: "Lỗi máy chủ")
                     }
                 }
+                patch("/{id}/messages/{messageId}") {
+                    val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
+                    val saved = Repository.editMessage(
+                        call.companyId(),
+                        call.userId(),
+                        call.memberRole(),
+                        call.channelId(),
+                        messageId,
+                        call.receive<com.workhub.shared.MessageEdit>().body,
+                    )
+                    fanout(call.companyId(), call.channelId(), json.encodeToString(WsEvent.serializer(), WsEvent("message_edit", message = saved)))
+                    call.respond(saved)
+                }
+                delete("/{id}/messages/{messageId}") {
+                    val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
+                    val saved = Repository.deleteMessage(
+                        call.companyId(),
+                        call.userId(),
+                        call.memberRole(),
+                        call.channelId(),
+                        messageId,
+                    )
+                    fanout(call.companyId(), call.channelId(), json.encodeToString(WsEvent.serializer(), WsEvent("message_delete", message = saved)))
+                    call.respond(saved)
+                }
+                put("/{id}/messages/{messageId}/pin") {
+                    val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
+                    val pinned = call.receive<com.workhub.shared.PinWrite>().pinned
+                    Repository.setMessagePin(call.userId(), call.channelId(), messageId, pinned)
+                    call.respond(HttpStatusCode.NoContent)
+                }
+                get("/{id}/pins") {
+                    call.respond(Repository.pinnedMessageIds(call.userId(), call.channelId()))
+                }
+            }
+            get("/presence/online") {
+                call.respond(IdList(ChatHub.onlineUserIds().toList()))
+            }
+            post("/push-tokens") {
+                val body = call.receive<com.workhub.shared.PushTokenWrite>()
+                registerPushToken(call.userId(), body.token, body.platform)
+                call.respond(HttpStatusCode.NoContent)
             }
         }
         webSocket("/ws") {
@@ -411,23 +506,28 @@ fun Application.module() {
                 return@webSocket
             }
             val connection = ChatHub.join(workspaceId, userId)
+            broadcastPresence(workspaceId, userId, online = true)
             val outbound = launch {
                 connection.outgoing.consumeEach { frame -> send(frame) }
             }
             try {
-                incoming.consumeEach { }
+                incoming.consumeEach { frame ->
+                    val text = (frame as? Frame.Text)?.readText() ?: return@consumeEach
+                    handleClientWsEvent(workspaceId, userId, text) { reply ->
+                        connection.outgoing.trySend(Frame.Text(reply))
+                    }
+                }
             } finally {
                 outbound.cancel()
                 ChatHub.leave(connection)
+                broadcastPresence(workspaceId, userId, online = false)
             }
         }
     }
 }
 
-private fun fanout(companyId: String, channelId: String, payload: String) {
-    ChatHub.publish(companyId, payload)
-    Repository.channelMemberIds(channelId).forEach { ChatHub.publishToUser(it, payload) }
-}
+private fun fanout(companyId: String, channelId: String, payload: String) =
+    fanoutChannelEvent(companyId, Repository.channelMemberIds(channelId), payload)
 
 private fun ApplicationCall.userId(): String =
     principal<JWTPrincipal>()!!.payload.getClaim("userId").asString()
@@ -471,51 +571,6 @@ private fun requireClientId(raw: String): String {
     return raw
 }
 
-private class Connection(
-    val companyId: String,
-    val userId: String,
-    val outgoing: Channel<Frame> = Channel(Channel.UNLIMITED),
-)
-
-private object ChatHub {
-    private val rooms = ConcurrentHashMap<String, MutableSet<Connection>>()
-
-    fun join(companyId: String, userId: String): Connection {
-        val connection = Connection(companyId, userId)
-        rooms.computeIfAbsent(companyId) { java.util.concurrent.CopyOnWriteArraySet() }.add(connection)
-        return connection
-    }
-
-    fun leave(connection: Connection) {
-        rooms[connection.companyId]?.remove(connection)
-        connection.outgoing.close()
-    }
-
-    fun publish(companyId: String, payload: String) {
-        rooms[companyId]?.forEach { connection ->
-            connection.outgoing.trySend(Frame.Text(payload))
-        }
-    }
-
-    fun userIds(companyId: String): Set<String> =
-        rooms[companyId]?.map { it.userId }?.toSet().orEmpty()
-
-    fun publishTo(companyId: String, userId: String, payload: String) {
-        rooms[companyId]?.filter { it.userId == userId }?.forEach { connection ->
-            connection.outgoing.trySend(Frame.Text(payload))
-        }
-    }
-
-    /** Reaches the user even when their socket is joined from another workspace. */
-    fun publishToUser(userId: String, payload: String) {
-        rooms.values.forEach { room ->
-            room.filter { it.userId == userId }.forEach { connection ->
-                connection.outgoing.trySend(Frame.Text(payload))
-            }
-        }
-    }
-}
-
 private data class PendingNotice(val userId: String, val notice: NotificationDto)
 
 private fun deliverNotices(companyId: String, notices: List<PendingNotice>) {
@@ -525,7 +580,55 @@ private fun deliverNotices(companyId: String, notices: List<PendingNotice>) {
             WsEvent(type = "notification", notification = pending.notice),
         )
         ChatHub.publishToUser(pending.userId, payload)
+        tryPushNotification(pending.userId, pending.notice)
     }
+}
+
+private fun handleClientWsEvent(
+    companyId: String,
+    userId: String,
+    raw: String,
+    reply: (String) -> Unit,
+) {
+    val event = runCatching { json.decodeFromString(WsEvent.serializer(), raw) }.getOrNull() ?: return
+    when (event.type) {
+        "ping" -> reply(json.encodeToString(WsEvent.serializer(), WsEvent(type = "pong")))
+        "typing" -> {
+            val channelId = event.channelId?.trim()?.ifBlank { null } ?: return
+            val name = Repository.senderName(userId)
+            val payload = json.encodeToString(
+                WsEvent.serializer(),
+                WsEvent(type = "typing", channelId = channelId, userId = userId, userName = name),
+            )
+            Repository.channelMemberIds(channelId)
+                .filter { it != userId }
+                .forEach { ChatHub.publishToUser(it, payload) }
+        }
+        "read" -> {
+            val channelId = event.channelId?.trim()?.ifBlank { null } ?: return
+            val at = event.lastReadAt ?: return
+            Repository.markChannelRead(companyId, userId, channelId, at, event.lastMessageId)
+            val payload = json.encodeToString(
+                WsEvent.serializer(),
+                WsEvent(
+                    type = "read",
+                    channelId = channelId,
+                    userId = userId,
+                    lastReadAt = at,
+                    lastMessageId = event.lastMessageId,
+                ),
+            )
+            fanout(companyId, channelId, payload)
+        }
+    }
+}
+
+private fun broadcastPresence(companyId: String, userId: String, online: Boolean) {
+    val payload = json.encodeToString(
+        WsEvent.serializer(),
+        WsEvent(type = "presence", userId = userId, online = online),
+    )
+    ChatHub.publish(companyId, payload)
 }
 
 private val ALLOWED_REACTIONS = setOf("❤️", "👍", "😂", "😮", "😢", "😠")
@@ -1189,9 +1292,7 @@ private object Repository {
             }
         }
         if (others.size < 2) throw AppException(HttpStatusCode.BadRequest, "Nhóm cần ít nhất 3 người")
-        val names = memberNames(companyId)
-        val fallback = (listOf(userId) + others).mapNotNull { names[it] }.joinToString(", ").take(80).ifBlank { "Nhóm" }
-        val channelName = rawName.trim().ifBlank { fallback }.take(80)
+        val channelName = rawName.trim().ifBlank { groupLabel(listOf(userId) + others) }.take(80)
         val id = nextId()
         Channels.insert {
             it[Channels.id] = id
@@ -1204,6 +1305,17 @@ private object Repository {
         addChannelMemberRow(id, userId)
         others.forEach { addChannelMemberRow(id, it) }
         displayChannel(Channels.select { Channels.id eq id }.single(), userId)
+    }
+
+    fun renameChannel(companyId: String, userId: String, role: String, channelId: String, rawName: String): ChannelDto = db {
+        val channel = requireVisibleChannel(companyId, userId, role, channelId)
+        if (channelKind(channel) != "GROUP") {
+            throw AppException(HttpStatusCode.BadRequest, "Chỉ nhóm mới đổi được tên")
+        }
+        val members = ChannelMembers.select { ChannelMembers.channelId eq channelId }.map { it[ChannelMembers.userId] }
+        val channelName = rawName.trim().ifBlank { groupLabel(members) }.take(80)
+        Channels.update({ Channels.id eq channelId }) { it[Channels.name] = channelName }
+        displayChannel(Channels.select { Channels.id eq channelId }.single(), userId)
     }
 
     fun createChannel(companyId: String, userId: String, request: ChannelWrite): ChannelDto = db {
@@ -1239,9 +1351,183 @@ private object Repository {
         }
     }
 
-    fun messages(companyId: String, userId: String, role: String, channelId: String, parentId: String?): List<MessageDto> = db {
+    fun messages(
+        companyId: String,
+        userId: String,
+        role: String,
+        channelId: String,
+        parentId: String?,
+        before: Long? = null,
+        after: Long? = null,
+        limit: Int = 50,
+        query: String? = null,
+    ): List<MessageDto> = db {
         requireVisibleChannel(companyId, userId, role, channelId)
-        messageRows(channelId, parentId?.trim()?.ifBlank { null })
+        messageRows(channelId, parentId?.trim()?.ifBlank { null }, before, after, limit, query)
+    }
+
+    fun senderName(userId: String): String = db {
+        Users.select { Users.id eq userId }.singleOrNull()?.get(Users.name) ?: "Ẩn"
+    }
+
+    fun markChannelRead(
+        companyId: String,
+        userId: String,
+        channelId: String,
+        lastReadAt: Long,
+        lastMessageId: String?,
+    ) = db {
+        val existing = ChannelReads.select {
+            (ChannelReads.channelId eq channelId) and (ChannelReads.userId eq userId)
+        }.singleOrNull()
+        if (existing != null && existing[ChannelReads.lastReadAt] >= lastReadAt) return@db
+        if (existing == null) {
+            ChannelReads.insert {
+                it[ChannelReads.channelId] = channelId
+                it[ChannelReads.userId] = userId
+                it[ChannelReads.lastReadAt] = lastReadAt
+                it[ChannelReads.lastMessageId] = lastMessageId
+            }
+        } else {
+            ChannelReads.update({
+                (ChannelReads.channelId eq channelId) and (ChannelReads.userId eq userId)
+            }) {
+                it[ChannelReads.lastReadAt] = lastReadAt
+                it[ChannelReads.lastMessageId] = lastMessageId
+            }
+        }
+    }
+
+    fun channelReadStates(companyId: String, userId: String): List<com.workhub.shared.ChannelReadDto> = db {
+        val channelIds = channels(companyId, userId, memberRole(userId, companyId)).map { it.id }
+        ChannelReads.select { ChannelReads.userId eq userId }
+            .filter { it[ChannelReads.channelId] in channelIds }
+            .map {
+                com.workhub.shared.ChannelReadDto(
+                    it[ChannelReads.channelId],
+                    it[ChannelReads.lastReadAt],
+                    it[ChannelReads.lastMessageId],
+                )
+            }
+    }
+
+    private fun memberRole(userId: String, companyId: String): String =
+        Memberships.select { (Memberships.userId eq userId) and (Memberships.workspaceId eq companyId) }
+            .singleOrNull()?.get(Memberships.role) ?: "MEMBER"
+
+    fun editMessage(
+        companyId: String,
+        userId: String,
+        role: String,
+        channelId: String,
+        messageId: String,
+        rawBody: String,
+    ): MessageDto = db {
+        requireVisibleChannel(companyId, userId, role, channelId)
+        val row = Messages.select { Messages.id eq messageId }.singleOrNull()
+            ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy tin nhắn")
+        if (row[Messages.channelId] != channelId) throw AppException(HttpStatusCode.Conflict, "Mã tin nhắn đã được dùng")
+        if (row[Messages.senderId] != userId) throw AppException(HttpStatusCode.Forbidden, "Chỉ người gửi được sửa")
+        if (row[Messages.deletedAt] != null) throw AppException(HttpStatusCode.Gone, "Tin nhắn đã bị xoá")
+        val now = System.currentTimeMillis()
+        if (now - row[Messages.createdAt] > 15 * 60 * 1000) {
+            throw AppException(HttpStatusCode.Forbidden, "Hết thời gian sửa tin nhắn")
+        }
+        val body = rawBody.trim()
+        if (body.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Tin nhắn trống")
+        if (body.length > 2000) throw AppException(HttpStatusCode.BadRequest, "Tin nhắn tối đa 2000 ký tự")
+        Messages.update({ Messages.id eq messageId }) {
+            it[Messages.body] = body
+            it[Messages.updatedAt] = now
+        }
+        messageRows(channelId, row[Messages.parentId], limit = 200).firstOrNull { it.id == messageId }
+            ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy tin nhắn")
+    }
+
+    fun deleteMessage(
+        companyId: String,
+        userId: String,
+        role: String,
+        channelId: String,
+        messageId: String,
+    ): MessageDto = db {
+        requireVisibleChannel(companyId, userId, role, channelId)
+        val row = Messages.select { Messages.id eq messageId }.singleOrNull()
+            ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy tin nhắn")
+        if (row[Messages.channelId] != channelId) throw AppException(HttpStatusCode.Conflict, "Mã tin nhắn đã được dùng")
+        if (row[Messages.senderId] != userId && role != "ADMIN") {
+            throw AppException(HttpStatusCode.Forbidden, "Không được thu hồi tin nhắn này")
+        }
+        if (row[Messages.deletedAt] != null) {
+            return@db messageRows(channelId, row[Messages.parentId], limit = 200).first { it.id == messageId }
+        }
+        val now = System.currentTimeMillis()
+        Messages.update({ Messages.id eq messageId }) {
+            it[Messages.deletedAt] = now
+            it[Messages.updatedAt] = now
+        }
+        messageRows(channelId, row[Messages.parentId], limit = 200).first { it.id == messageId }
+    }
+
+    fun setMessagePin(userId: String, channelId: String, messageId: String, pinned: Boolean) = db {
+        if (pinned) {
+            MessagePins.deleteWhere {
+                (MessagePins.userId eq userId) and (MessagePins.channelId eq channelId)
+            }
+            MessagePins.insert {
+                it[MessagePins.messageId] = messageId
+                it[MessagePins.userId] = userId
+                it[MessagePins.channelId] = channelId
+            }
+        } else {
+            MessagePins.deleteWhere {
+                (MessagePins.messageId eq messageId) and (MessagePins.userId eq userId)
+            }
+        }
+    }
+
+    fun pinnedMessageIds(userId: String, channelId: String): List<String> = db {
+        MessagePins.select {
+            (MessagePins.userId eq userId) and (MessagePins.channelId eq channelId)
+        }.map { it[MessagePins.messageId] }
+    }
+
+    fun leaveChannel(companyId: String, userId: String, role: String, channelId: String) = db {
+        val channel = requireVisibleChannel(companyId, userId, role, channelId)
+        if (channelKind(channel) == "DIRECT") {
+            throw AppException(HttpStatusCode.BadRequest, "Không thể rời tin nhắn riêng")
+        }
+        ChannelMembers.deleteWhere {
+            (ChannelMembers.channelId eq channelId) and (ChannelMembers.userId eq userId)
+        }
+    }
+
+    fun removeChannelMember(
+        companyId: String,
+        actorId: String,
+        role: String,
+        channelId: String,
+        memberId: String,
+    ) = db {
+        if (role != "ADMIN" && role != "SUPERVISOR") {
+            throw AppException(HttpStatusCode.Forbidden, "Chỉ quản trị hoặc giám sát được thực hiện")
+        }
+        requireVisibleChannel(companyId, actorId, role, channelId)
+        ChannelMembers.deleteWhere {
+            (ChannelMembers.channelId eq channelId) and (ChannelMembers.userId eq memberId)
+        }
+    }
+
+    fun setChannelMuted(userId: String, channelId: String, muted: Boolean) = db {
+        ChannelMutes.deleteWhere {
+            (ChannelMutes.channelId eq channelId) and (ChannelMutes.userId eq userId)
+        }
+        if (muted) {
+            ChannelMutes.insert {
+                it[ChannelMutes.channelId] = channelId
+                it[ChannelMutes.userId] = userId
+            }
+        }
     }
 
     /** Message already stored under [messageId] in this channel (retried client upload), or null. */
@@ -1263,6 +1549,12 @@ private object Repository {
             taskId = row[Messages.taskId],
             noteId = row[Messages.noteId],
             reactions = reactionsFor(listOf(messageId))[messageId].orEmpty(),
+            attachmentUrl = row[Messages.attachmentUrl],
+            attachmentName = row[Messages.attachmentName],
+            attachmentKind = row[Messages.attachmentKind],
+            replyToId = row[Messages.replyToId],
+            replyToName = row[Messages.replyToName],
+            replyToBody = row[Messages.replyToBody],
         )
     }
 
@@ -1300,23 +1592,20 @@ private object Repository {
         userId: String,
         role: String,
         channelId: String,
-        rawBody: String,
-        parentId: String?,
-        rawLocationUrl: String? = null,
+        write: MessageWrite,
         clientId: String? = null,
-        taskId: String? = null,
-        noteId: String? = null,
     ): MessageDto {
         val (saved, notices) = db {
             val channel = requireVisibleChannel(companyId, userId, role, channelId)
-            val body = rawBody.trim()
-            val location = cleanLocationUrl(rawLocationUrl)
-            val (sharedTask, sharedNote) = cleanSharedRef(companyId, userId, role, taskId, noteId)
-            if (body.isEmpty() && location == null) {
+            val body = write.body.trim()
+            val location = cleanLocationUrl(write.locationUrl)
+            val attachment = write.attachmentUrl?.trim()?.ifBlank { null }
+            val (sharedTask, sharedNote) = cleanSharedRef(companyId, userId, role, write.taskId, write.noteId)
+            if (body.isEmpty() && location == null && attachment == null) {
                 throw AppException(HttpStatusCode.BadRequest, "Tin nhắn trống")
             }
             if (body.length > 2000) throw AppException(HttpStatusCode.BadRequest, "Tin nhắn tối đa 2000 ký tự")
-            val threadId = parentId?.trim()?.ifBlank { null }
+            val threadId = write.parentId?.trim()?.ifBlank { null }
             if (threadId != null) {
                 val parent = Messages.select { Messages.id eq threadId }.singleOrNull()
                     ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy tin nhắn gốc")
@@ -1335,13 +1624,28 @@ private object Repository {
                 it[locationUrl] = location
                 it[Messages.taskId] = sharedTask
                 it[Messages.noteId] = sharedNote
+                it[Messages.attachmentUrl] = attachment
+                it[Messages.attachmentName] = write.attachmentName?.trim()?.take(200)
+                it[Messages.attachmentKind] = write.attachmentKind?.trim()?.take(16)
+                it[Messages.replyToId] = write.replyToId?.trim()?.ifBlank { null }
+                it[Messages.replyToName] = write.replyToName?.trim()?.take(80)
+                it[Messages.replyToBody] = write.replyToBody?.trim()?.take(200)
                 it[createdAt] = now
                 it[updatedAt] = now
             }
             val senderName = Users.select { Users.id eq userId }.singleOrNull()?.get(Users.name) ?: "Ẩn"
-            val preview = body.ifBlank { location.orEmpty() }
-            val saved = MessageDto(id, channelId, userId, senderName, body, now, threadId, 0, location, sharedTask, sharedNote)
-            saved to queueChatNotices(companyId, userId, channel, preview)
+            val preview = body.ifBlank { attachment?.let { write.attachmentName ?: "Tệp" } ?: location.orEmpty() }
+            val saved = MessageDto(
+                id, channelId, userId, senderName, body, now, threadId, 0, location, sharedTask, sharedNote,
+                attachmentUrl = attachment,
+                attachmentName = write.attachmentName,
+                attachmentKind = write.attachmentKind,
+                replyToId = write.replyToId,
+                replyToName = write.replyToName,
+                replyToBody = write.replyToBody,
+            )
+            val mentionNotices = queueMentionNotices(companyId, userId, channelId, id, body, senderName)
+            saved to (queueChatNotices(companyId, userId, channel, preview) + mentionNotices)
         }
         deliverNotices(companyId, notices)
         return saved
@@ -1763,11 +2067,47 @@ private object Repository {
         return "dm:$first:$second"
     }
 
+    private fun groupLabel(userIds: List<String>): String {
+        val names = userIds.distinct().mapNotNull { id ->
+            Users.select { Users.id eq id }.singleOrNull()?.get(Users.name)?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        return names.joinToString(", ").take(80).ifBlank { "Nhóm" }
+    }
+
     private fun groupLabel(channelId: String): String {
         val names = ChannelMembers.select { ChannelMembers.channelId eq channelId }.mapNotNull { row ->
             Users.select { Users.id eq row[ChannelMembers.userId] }.singleOrNull()?.get(Users.name)
         }
         return names.joinToString(", ").take(80).ifBlank { "Nhóm" }
+    }
+
+    private val mentionPattern = Regex("@([A-Za-z0-9_.]{2,32})")
+
+    private fun queueMentionNotices(
+        companyId: String,
+        senderId: String,
+        channelId: String,
+        messageId: String,
+        body: String,
+        senderName: String,
+    ): List<PendingNotice> {
+        val handles = mentionPattern.findAll(body).map { it.groupValues[1].lowercase() }.toSet()
+        if (handles.isEmpty()) return emptyList()
+        val recipients = handles.mapNotNull { handle ->
+            Memberships.join(Users, org.jetbrains.exposed.sql.JoinType.INNER, Memberships.userId, Users.id)
+                .select {
+                    (Memberships.workspaceId eq companyId) and (Users.username eq handle)
+                }
+                .singleOrNull()
+                ?.get(Memberships.userId)
+        }.filter { it != senderId }.distinct()
+        return recipients.map { recipient ->
+            MessageMentions.insert {
+                it[MessageMentions.messageId] = messageId
+                it[MessageMentions.userId] = recipient
+            }
+            storeNotice(recipient, companyId, "mention", senderName, body.take(140), channelId)
+        }
     }
 
     private fun queueChatNotices(companyId: String, senderId: String, channel: ResultRow, body: String): List<PendingNotice> {

@@ -23,6 +23,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.workhub.app.R
 import com.workhub.app.data.LocalAppGraph
 import com.workhub.shared.NotificationDto
@@ -40,6 +41,7 @@ private const val ALERT_CHANNEL = "workhub_messages"
 fun NotificationBinder() {
     val context = LocalContext.current
     val graph = LocalAppGraph.current
+    val settings by graph.userPrefs.state.collectAsStateWithLifecycle(com.workhub.app.data.UserSettings())
     val lifecycleOwner = LocalLifecycleOwner.current
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var resumeTick by remember { mutableIntStateOf(0) }
@@ -79,6 +81,7 @@ fun NotificationBinder() {
     }
     LaunchedEffect(resumeTick) {
         fun present(note: NotificationDto) {
+            if (settings.muteNotifications) return
             if (!seen.add(note.id)) return
             val sameChat = AppVisibility.foreground && note.channelId != null && note.channelId == AppVisibility.channelId
             if (!sameChat) showWorkHubNotification(context, note)
@@ -94,6 +97,7 @@ fun NotificationBinder() {
     }
     LaunchedEffect(Unit) {
         fun present(note: NotificationDto) {
+            if (settings.muteNotifications) return
             if (!seen.add(note.id)) return
             val sameChat = AppVisibility.foreground && note.channelId != null && note.channelId == AppVisibility.channelId
             if (!sameChat) showWorkHubNotification(context, note)
