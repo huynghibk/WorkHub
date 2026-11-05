@@ -360,8 +360,12 @@
     <string name="channel_name">频道名称</string>
     <string name="keyword">关键词</string>
     <string name="thread_count">话题 %1$d</string>
+    <string name="chat_inbox_empty">还没有会话。点 + 给一个人发消息。</string>
+    <string name="chat_inbox_empty_line">还没有消息</string>
     <string name="new_chat">新聊天</string>
-    <string name="new_chat_hint">点一个名字开始聊天。勾选两个人以上再创建群组。</string>
+    <string name="new_chat_hint">点工作区里的人，或输入准确的用户名来给其他人发消息。</string>
+    <string name="new_chat_username">用户名</string>
+    <string name="new_chat_find">查找此用户名</string>
     <string name="direct_message">私聊</string>
     <string name="new_group">创建群聊</string>
     <string name="group_name">群名称</string>

@@ -225,13 +225,25 @@ fun ChatScreen(
 
     // Close drawer first; otherwise go home (devices without edge gesture still need a path).
     BackHandler(enabled = true) {
-        if (drawerState.isOpen) {
-            scope.launch { drawerState.close() }
-        } else {
-            onNavigateHome()
+        when {
+            drawerState.isOpen -> scope.launch { drawerState.close() }
+            vm.thread != null -> vm.closeThread()
+            vm.channel != null -> vm.closeConversation()
+            else -> onNavigateHome()
         }
     }
-    ModalNavigationDrawer(
+    val latest by vm.latest.collectAsStateWithLifecycle()
+    if (vm.channel == null) {
+        ChatInbox(
+            channels = allChannels,
+            latest = latest,
+            onOpen = vm::open,
+            onNew = {
+                newChatPicks = emptySet()
+                newChat = true
+            },
+        )
+    } else ModalNavigationDrawer(
         drawerState = drawerState,
         // Open via menu button only so left-edge swipe can go Home; swipe still closes when open.
         gesturesEnabled = drawerState.isOpen,
@@ -281,24 +293,10 @@ fun ChatScreen(
                 },
                 navigationIcon = {
                     Row {
-                        IconButton(onClick = onNavigateHome) {
+                        IconButton(onClick = { vm.closeConversation() }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(R.string.back),
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    if (drawerState.isOpen) drawerState.close() else drawerState.open()
-                                }
-                            },
-                        ) {
-                            Icon(
-                                if (drawerState.isOpen) Icons.Filled.Close else Icons.Filled.Menu,
-                                contentDescription = stringResource(
-                                    if (drawerState.isOpen) R.string.chat_close_sidebar else R.string.chat_open_sidebar,
-                                ),
                             )
                         }
                     }
@@ -619,8 +617,108 @@ fun ChatScreen(
                 vm.openGroup("", ids)
                 scope.launch { drawerState.close() }
             },
+            onFind = { name, report ->
+                vm.openByUsername(name, onReady = {
+                    newChat = false
+                    newChatPicks = emptySet()
+                    scope.launch { drawerState.close() }
+                }, onError = report)
+            },
             onDismiss = { newChat = false },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatInbox(
+    channels: List<ChannelDto>,
+    latest: Map<String, MessageDto>,
+    onOpen: (ChannelDto) -> Unit,
+    onNew: () -> Unit,
+) {
+    var filter by remember { mutableStateOf("") }
+    val shown = channels
+        .filter { filter.isBlank() || it.name.contains(filter, ignoreCase = true) }
+        .sortedByDescending { latest[it.id]?.createdAt ?: 0L }
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.tab_chat)) },
+                actions = {
+                    IconButton(onClick = onNew) {
+                        Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.new_chat))
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            OutlinedTextField(
+                value = filter,
+                onValueChange = { filter = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.search)) },
+            )
+            if (shown.isEmpty()) {
+                Text(
+                    stringResource(R.string.chat_inbox_empty),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                )
+            }
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(shown, key = { it.id }) { channel ->
+                    InboxRow(channel, latest[channel.id], onClick = { onOpen(channel) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InboxRow(channel: ChannelDto, last: MessageDto?, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                channel.name.trim().take(1).uppercase().ifBlank { "#" },
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(channel.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Text(
+                last?.body?.replace('\n', ' ')?.ifBlank { null } ?: stringResource(R.string.chat_inbox_empty_line),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (last != null) {
+            Text(
+                formatTime(last.createdAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -631,8 +729,14 @@ private fun NewChatDialog(
     onToggle: (String) -> Unit,
     onOpen: (String) -> Unit,
     onGroup: () -> Unit,
+    onFind: (String, (String) -> Unit) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var query by remember { mutableStateOf("") }
+    var findError by remember { mutableStateOf<String?>(null) }
+    val shown = members.filter {
+        query.isBlank() || it.name.contains(query, true) || it.username.contains(query, true)
+    }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),
@@ -642,17 +746,42 @@ private fun NewChatDialog(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.new_chat), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Text(stringResource(R.string.new_chat_hint), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = {
+                        query = it
+                        findError = null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text(stringResource(R.string.new_chat_username)) },
+                )
+                if (query.isNotBlank()) {
+                    TextButton(onClick = { onFind(query.trim()) { findError = it } }) {
+                        Text(stringResource(R.string.new_chat_find))
+                    }
+                }
+                findError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
-                    items(members, key = { it.id }) { member ->
+                    items(shown, key = { it.id }) { member ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                member.name,
-                                modifier = Modifier.weight(1f).clickable { onOpen(member.id) }.padding(vertical = 8.dp),
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
+                            Column(
+                                Modifier.weight(1f).clickable { onOpen(member.id) }.padding(vertical = 8.dp),
+                            ) {
+                                Text(member.name, style = MaterialTheme.typography.bodyLarge)
+                                if (member.username.isNotBlank()) {
+                                    Text(
+                                        "@${member.username}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                             androidx.compose.material3.Checkbox(
                                 checked = member.id in picked,
                                 onCheckedChange = { onToggle(member.id) },
@@ -890,9 +1019,6 @@ private fun MessageBubble(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    if (mine) {
-                        ReactButton(onClick = { emojiBar = true })
-                    }
                     if (sharedTask || sharedNote) {
                         EntityRailCard(
                             task = sharedTask,
@@ -1193,6 +1319,8 @@ class ChatViewModel(
         chat.pendingIds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
     val failedIds: StateFlow<Set<String>> =
         chat.failedIds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    val latest: StateFlow<Map<String, MessageDto>> =
+        chat.latest.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
     var members by mutableStateOf<List<MemberDto>>(emptyList())
         private set
     var loading by mutableStateOf(true)
@@ -1213,10 +1341,6 @@ class ChatViewModel(
                 live = connected
             }
         }
-        viewModelScope.launch {
-            val cached = channels.first { it.isNotEmpty() }
-            if (channel == null) select(cached.first(), null)
-        }
     }
 
     private fun select(next: ChannelDto?, root: MessageDto?) {
@@ -1232,8 +1356,8 @@ class ChatViewModel(
             try {
                 val list = chat.refreshChannels()
                 members = api.members()
-                val selected = channel?.let { current -> list.firstOrNull { it.id == current.id } } ?: list.firstOrNull()
-                select(selected, thread?.takeIf { selected?.id == channel?.id })
+                val selected = channel?.let { current -> list.firstOrNull { it.id == current.id } }
+                select(selected, thread?.takeIf { selected != null && selected.id == channel?.id })
                 selected?.let { chat.refreshMessages(it.id, thread?.id) }
             } catch (e: Exception) {
                 // Offline with a cached history is normal: keep showing it.
@@ -1246,11 +1370,16 @@ class ChatViewModel(
 
     /** Resume without full-screen loading spinner. */
     fun refreshQuiet() {
-        val selected = channel ?: return
+        val selected = channel
         val root = thread?.id
         viewModelScope.launch {
-            runCatching { chat.refreshMessages(selected.id, root) }
+            runCatching { chat.refreshChannels() }
+            if (selected != null) runCatching { chat.refreshMessages(selected.id, root) }
         }
+    }
+
+    fun closeConversation() {
+        select(null, null)
     }
 
     fun open(next: ChannelDto) {
@@ -1297,6 +1426,20 @@ class ChatViewModel(
                 list.firstOrNull { it.id == channelId }?.let { select(it, thread) }
             } catch (e: Exception) {
                 error = e.userMessage()
+            }
+        }
+    }
+
+    fun openByUsername(raw: String, onReady: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val user = api.lookupUser(raw)
+                val created = api.openDirect(user.id)
+                chat.refreshChannels()
+                open(created)
+                onReady()
+            } catch (e: Exception) {
+                onError(e.userMessage())
             }
         }
     }

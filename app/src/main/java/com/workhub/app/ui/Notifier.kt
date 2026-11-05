@@ -1,6 +1,7 @@
 package com.workhub.app.ui
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -33,7 +34,7 @@ object AppVisibility {
     @Volatile var channelId: String? = null
 }
 
-private const val ALERT_CHANNEL = "workhub"
+private const val ALERT_CHANNEL = "workhub_messages"
 
 @Composable
 fun NotificationBinder() {
@@ -52,9 +53,9 @@ fun NotificationBinder() {
                     resumeTick += 1
                 }
                 Lifecycle.Event.ON_STOP -> {
+                    // Screen lock and leaving the app both stop the activity, but the process
+                    // stays. Keep the socket so a message can still raise a notification.
                     AppVisibility.foreground = false
-                    // Drop dead sockets before WeChat / other apps take over.
-                    graph.realtime.stop()
                 }
                 else -> Unit
             }
@@ -119,7 +120,10 @@ private fun showWorkHubNotification(context: Context, note: NotificationDto) {
             ALERT_CHANNEL,
             context.getString(R.string.notif_channel),
             NotificationManager.IMPORTANCE_HIGH,
-        )
+        ).apply {
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            enableVibration(true)
+        }
         manager.createNotificationChannel(channel)
     }
     val title = if (note.kind == "task_assigned") {
@@ -141,6 +145,8 @@ private fun showWorkHubNotification(context: Context, note: NotificationDto) {
         .setAutoCancel(true)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        .setDefaults(NotificationCompat.DEFAULT_ALL)
         .build()
     if (Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED

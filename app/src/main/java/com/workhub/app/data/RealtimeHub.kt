@@ -18,8 +18,8 @@ import kotlinx.coroutines.launch
 
 /**
  * One shared WebSocket for the whole app.
- * Stop on background / restart on foreground so sockets do not hang after
- * switching to WeChat (etc.) then returning.
+ * It stays up while the screen is locked so incoming messages can notify.
+ * Coming back to the foreground reconnects, in case the socket died in the background.
  */
 class RealtimeHub(private val api: WorkHubApi) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -360,8 +360,12 @@
     <string name="channel_name">Channel name</string>
     <string name="keyword">Keyword</string>
     <string name="thread_count">Thread %1$d</string>
+    <string name="chat_inbox_empty">No conversations yet. Tap + to message someone.</string>
+    <string name="chat_inbox_empty_line">No messages yet</string>
     <string name="new_chat">New chat</string>
-    <string name="new_chat_hint">Tap a name to chat. Tick two or more, then create a group.</string>
+    <string name="new_chat_hint">Tap someone in this workspace, or enter an exact username to message anyone.</string>
+    <string name="new_chat_username">Username</string>
+    <string name="new_chat_find">Find this username</string>
     <string name="direct_message">Direct message</string>
     <string name="new_group">New group</string>
     <string name="group_name">Group name</string>

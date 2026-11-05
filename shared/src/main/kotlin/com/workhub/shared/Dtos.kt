@@ -99,6 +99,7 @@ data class MemberDto(
     val name: String,
     val email: String,
     val role: String = "MEMBER",
+    val username: String = "",
 )
 
 @Serializable
@@ -314,6 +315,8 @@ data class WsEvent(
     val deletedId: String? = null,
     /** type = reaction */
     val reaction: ReactionEvent? = null,
+    /** type = channel. A new or updated conversation for this user. */
+    val channel: ChannelDto? = null,
 )
 
 @Serializable

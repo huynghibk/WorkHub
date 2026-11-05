@@ -222,6 +222,11 @@ class WorkHubApi(private val session: SessionStore) {
 
     suspend fun members(): List<MemberDto> = send(HttpMethod.Get, "/users")
 
+    suspend fun lookupUser(username: String): MemberDto {
+        val query = java.net.URLEncoder.encode(username.trim(), Charsets.UTF_8.name())
+        return send(HttpMethod.Get, "/users/lookup?username=$query")
+    }
+
     suspend fun workTree(): WorkTree = send(HttpMethod.Get, "/work")
 
     suspend fun createSpace(name: String, isPrivate: Boolean): SpaceNode =
@@ -306,6 +311,10 @@ class WorkHubApi(private val session: SessionStore) {
     /** Idempotent send with a client-generated id (used by the offline queue). */
     suspend fun putMessage(channelId: String, id: String, write: MessageWrite, workspaceId: String): MessageDto =
         send(HttpMethod.Put, "/channels/$channelId/messages/$id", write, workspaceId = workspaceId)
+
+    /** Older servers only accept this. The returned id is the server's, not the client's. */
+    suspend fun postMessage(channelId: String, write: MessageWrite, workspaceId: String): MessageDto =
+        send(HttpMethod.Post, "/channels/$channelId/messages", write, workspaceId = workspaceId)
 
     suspend fun react(channelId: String, messageId: String, emoji: String): com.workhub.shared.ReactionEvent =
         send(HttpMethod.Put, "/channels/$channelId/messages/$messageId/react", com.workhub.shared.ReactionWrite(emoji))

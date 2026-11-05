@@ -361,8 +361,12 @@
     <string name="channel_name">Tên kênh</string>
     <string name="keyword">Từ khóa</string>
     <string name="thread_count">Luồng %1$d</string>
+    <string name="chat_inbox_empty">Chưa có cuộc trò chuyện. Bấm + để nhắn một người.</string>
+    <string name="chat_inbox_empty_line">Chưa có tin nhắn</string>
     <string name="new_chat">Tin nhắn mới</string>
-    <string name="new_chat_hint">Chạm một tên để nhắn. Tick từ hai người rồi bấm Tạo nhóm.</string>
+    <string name="new_chat_hint">Chạm một người trong workspace. Nhập đúng username để nhắn người ở workspace khác.</string>
+    <string name="new_chat_username">Username</string>
+    <string name="new_chat_find">Tìm username này</string>
     <string name="direct_message">Nhắn riêng</string>
     <string name="new_group">Tạo nhóm</string>
     <string name="group_name">Tên nhóm</string>

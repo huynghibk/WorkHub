@@ -48,6 +48,23 @@ class ChatStore(
         }
     }
 
+    /** Newest root message per channel, for the conversation list. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val latest: Flow<Map<String, MessageDto>> =
+        session.state.map { it.workspace?.id }.distinctUntilChanged().flatMapLatest { ws ->
+            if (ws == null) {
+                flowOf(emptyMap())
+            } else {
+                db.chat().observeRoots(ws).map { rows ->
+                    val byChannel = linkedMapOf<String, MessageDto>()
+                    rows.forEach { row ->
+                        if (row.channelId !in byChannel) byChannel[row.channelId] = decode(row.payload)
+                    }
+                    byChannel
+                }
+            }
+        }
+
     /** Ids of messages still waiting to be uploaded (shown with a "sending" clock). */
     val pendingIds: Flow<Set<String>> = db.chat().observePendingIds().map { it.toSet() }
 
@@ -118,8 +135,19 @@ class ChatStore(
             if (write.taskId?.let { db.tasks().get(it)?.syncPending } == true) continue
             if (write.noteId?.let { db.notes().get(it)?.syncPending } == true) continue
             try {
-                val saved = api.putMessage(row.channelId, row.id, write, row.workspaceId)
-                db.chat().markSynced(row.id, sent, json.encodeToString(MessageDto.serializer(), saved), saved.createdAt)
+                val saved = try {
+                    api.putMessage(row.channelId, row.id, write, row.workspaceId)
+                } catch (e: ApiException) {
+                    // Servers that predate the idempotent route still accept a normal send.
+                    if (e.status != 404) throw e
+                    api.postMessage(row.channelId, write, row.workspaceId)
+                }
+                if (saved.id == row.id) {
+                    db.chat().markSynced(row.id, sent, json.encodeToString(MessageDto.serializer(), saved), saved.createdAt)
+                } else {
+                    db.chat().remove(row.id)
+                    db.chat().upsert(entity(row.workspaceId, saved))
+                }
             } catch (e: ApiException) {
                 if (e.status !in PERMANENT) throw e
                 db.chat().markFailed(row.id)
@@ -144,6 +172,12 @@ class ChatStore(
 
     /** Messages that would be lost on logout: still sending or refused. */
     suspend fun pendingCount(): Int = db.chat().unsentCount()
+
+    /** Pull the conversation list when a message arrives for a chat we have not cached yet. */
+    suspend fun ensureChannel(channelId: String) {
+        val ws = session.current().workspace?.id ?: return
+        if (db.chat().channelCount(ws, channelId) == 0) refreshChannels()
+    }
 
     /** One reaction per person. An empty emoji clears it. */
     suspend fun applyReaction(event: ReactionEvent) {

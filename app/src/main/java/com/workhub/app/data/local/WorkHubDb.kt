@@ -88,6 +88,12 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE channelId = :channelId AND parentId IS :parentId ORDER BY createdAt")
     fun observeMessages(channelId: String, parentId: String?): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE workspaceId = :workspaceId AND parentId IS NULL ORDER BY createdAt DESC")
+    fun observeRoots(workspaceId: String): Flow<List<MessageEntity>>
+
+    @Query("SELECT COUNT(*) FROM channels WHERE workspaceId = :workspaceId AND id = :id")
+    suspend fun channelCount(workspaceId: String, id: String): Int
+
     @Query("SELECT id FROM messages WHERE syncPending = 1")
     fun observePendingIds(): Flow<List<String>>
 

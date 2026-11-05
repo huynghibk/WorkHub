@@ -188,8 +188,12 @@ class OfflineStore(
                 db.notes().upsert(fresh)
             }
             "note_delete" -> event.deletedId?.let { db.notes().remove(it) }
-            "message" -> event.message?.let { chat.apply(it) }
+            "message" -> event.message?.let {
+                chat.apply(it)
+                chat.ensureChannel(it.channelId)
+            }
             "reaction" -> event.reaction?.let { chat.applyReaction(it) }
+            "channel" -> chat.refreshChannels()
         }
     }
 

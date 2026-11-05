@@ -223,6 +223,10 @@ fun Application.module() {
                 call.respond(Repository.updateProfile(call.userId(), call.receive()))
             }
             get("/users") { call.respond(Repository.members(call.companyId())) }
+            get("/users/lookup") {
+                val handle = call.request.queryParameters["username"].orEmpty()
+                call.respond(Repository.lookupUser(call.userId(), handle))
+            }
             get("/work") { call.respond(Repository.workTree(call.companyId(), call.userId(), call.memberRole())) }
             get("/search") {
                 val query = call.request.queryParameters["q"].orEmpty()
@@ -300,11 +304,13 @@ fun Application.module() {
                 get { call.respond(Repository.channels(call.companyId(), call.userId(), call.memberRole())) }
                 post("/direct") {
                     val created = Repository.openDirect(call.companyId(), call.userId(), call.receive<DirectWrite>().userId)
+                    Repository.announceChannel(call.companyId(), created.id)
                     call.respond(HttpStatusCode.Created, created)
                 }
                 post("/group") {
                     val body = call.receive<GroupWrite>()
                     val created = Repository.openGroup(call.companyId(), call.userId(), body.name, body.memberIds)
+                    Repository.announceChannel(call.companyId(), created.id)
                     call.respond(HttpStatusCode.Created, created)
                 }
                 post {
@@ -333,7 +339,7 @@ fun Application.module() {
                         taskId = body.taskId,
                         noteId = body.noteId,
                     )
-                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
+                    fanout(call.companyId(), call.channelId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
                 }
                 put("/{id}/messages/{messageId}") {
@@ -356,7 +362,7 @@ fun Application.module() {
                         taskId = body.taskId,
                         noteId = body.noteId,
                     )
-                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
+                    fanout(call.companyId(), call.channelId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
                 }
                 put("/{id}/messages/{messageId}/react") {
@@ -416,6 +422,11 @@ fun Application.module() {
             }
         }
     }
+}
+
+private fun fanout(companyId: String, channelId: String, payload: String) {
+    ChatHub.publish(companyId, payload)
+    Repository.channelMemberIds(channelId).forEach { ChatHub.publishToUser(it, payload) }
 }
 
 private fun ApplicationCall.userId(): String =
@@ -494,6 +505,15 @@ private object ChatHub {
             connection.outgoing.trySend(Frame.Text(payload))
         }
     }
+
+    /** Reaches the user even when their socket is joined from another workspace. */
+    fun publishToUser(userId: String, payload: String) {
+        rooms.values.forEach { room ->
+            room.filter { it.userId == userId }.forEach { connection ->
+                connection.outgoing.trySend(Frame.Text(payload))
+            }
+        }
+    }
 }
 
 private data class PendingNotice(val userId: String, val notice: NotificationDto)
@@ -504,7 +524,7 @@ private fun deliverNotices(companyId: String, notices: List<PendingNotice>) {
             WsEvent.serializer(),
             WsEvent(type = "notification", notification = pending.notice),
         )
-        ChatHub.publishTo(companyId, pending.userId, payload)
+        ChatHub.publishToUser(pending.userId, payload)
     }
 }
 
@@ -720,7 +740,13 @@ private object Repository {
     fun members(companyId: String): List<MemberDto> = db {
         Memberships.select { Memberships.workspaceId eq companyId }.map { row ->
             val user = Users.select { Users.id eq row[Memberships.userId] }.single()
-            MemberDto(user[Users.id], user[Users.name], user[Users.email], row[Memberships.role])
+            MemberDto(
+                user[Users.id],
+                user[Users.name],
+                user[Users.email],
+                row[Memberships.role],
+                user[Users.username].orEmpty(),
+            )
         }.sortedBy { it.name.lowercase() }
     }
 
@@ -1102,17 +1128,37 @@ private object Repository {
 
     fun channels(companyId: String, userId: String, role: String): List<ChannelDto> = db {
         ensureGeneralChannel(companyId)
-        Channels.select { (Channels.companyId eq companyId) and usable(Channels.isActive, Channels.deletedAt) }
+        val local = Channels.select { (Channels.companyId eq companyId) and usable(Channels.isActive, Channels.deletedAt) }
             .orderBy(Channels.createdAt to org.jetbrains.exposed.sql.SortOrder.ASC)
             .filter { canSeeChannel(userId, role, it) }
             .map { displayChannel(it, userId) }
+        val seen = local.map { it.id }.toSet()
+        val elsewhere = ChannelMembers.select { ChannelMembers.userId eq userId }.map { it[ChannelMembers.channelId] }
+            .filter { it !in seen }
+            .mapNotNull { id ->
+                val row = Channels.select { (Channels.id eq id) and usable(Channels.isActive, Channels.deletedAt) }.singleOrNull()
+                    ?: return@mapNotNull null
+                val kind = channelKind(row)
+                if (kind != "DIRECT" && kind != "GROUP") return@mapNotNull null
+                if (!canSeeChannel(userId, role, row)) return@mapNotNull null
+                displayChannel(row, userId)
+            }
+        local + elsewhere
+    }
+
+    fun lookupUser(selfId: String, raw: String): MemberDto = db {
+        val handle = raw.normalizedUsername()
+        val user = Users.select { Users.username eq handle }.singleOrNull()
+            ?: throw AppException(HttpStatusCode.NotFound, "Không thấy username này")
+        if (user[Users.id] == selfId) throw AppException(HttpStatusCode.BadRequest, "Không thể nhắn với chính mình")
+        MemberDto(user[Users.id], user[Users.name], "", "MEMBER", user[Users.username].orEmpty())
     }
 
     fun openDirect(companyId: String, userId: String, otherId: String): ChannelDto = db {
         val peerId = otherId.trim()
         if (peerId == userId) throw AppException(HttpStatusCode.BadRequest, "Không thể nhắn với chính mình")
-        if (Memberships.select { (Memberships.userId eq peerId) and (Memberships.workspaceId eq companyId) }.empty()) {
-            throw AppException(HttpStatusCode.BadRequest, "Người này không thuộc workspace")
+        if (Users.select { Users.id eq peerId }.empty()) {
+            throw AppException(HttpStatusCode.NotFound, "Không thấy người này")
         }
         val key = directKey(userId, peerId)
         val existing = Channels.select { (Channels.companyId eq companyId) and (Channels.name eq key) }.singleOrNull()
@@ -1138,8 +1184,8 @@ private object Repository {
     fun openGroup(companyId: String, userId: String, rawName: String, memberIds: List<String>): ChannelDto = db {
         val others = memberIds.map { it.trim() }.filter { it.isNotEmpty() && it != userId }.distinct()
         others.forEach { memberId ->
-            if (Memberships.select { (Memberships.userId eq memberId) and (Memberships.workspaceId eq companyId) }.empty()) {
-                throw AppException(HttpStatusCode.BadRequest, "Người này không thuộc workspace")
+            if (Users.select { Users.id eq memberId }.empty()) {
+                throw AppException(HttpStatusCode.NotFound, "Không thấy người này")
             }
         }
         if (others.size < 2) throw AppException(HttpStatusCode.BadRequest, "Nhóm cần ít nhất 3 người")
@@ -1677,6 +1723,22 @@ private object Repository {
         return member
     }
 
+    fun channelMemberIds(channelId: String): List<String> = db {
+        ChannelMembers.select { ChannelMembers.channelId eq channelId }.map { it[ChannelMembers.userId] }
+    }
+
+    fun announceChannel(companyId: String, channelId: String) = db {
+        val channel = Channels.select { Channels.id eq channelId }.singleOrNull() ?: return@db
+        val members = ChannelMembers.select { ChannelMembers.channelId eq channelId }.map { it[ChannelMembers.userId] }
+        members.forEach { memberId ->
+            val dto = displayChannel(channel, memberId)
+            ChatHub.publishToUser(
+                memberId,
+                json.encodeToString(WsEvent.serializer(), WsEvent("channel", channel = dto)),
+            )
+        }
+    }
+
     private fun channelKind(channel: ResultRow): String {
         val stored = channel[Channels.kind]
         if (stored == "DIRECT" || stored == "GROUP" || stored == "CHANNEL") return stored
@@ -1804,7 +1866,10 @@ private object Repository {
             (Channels.id eq channelId) and usable(Channels.isActive, Channels.deletedAt)
         }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy kênh chat")
-        if (channel[Channels.companyId] != companyId || !canSeeChannel(userId, role, channel)) {
+        val kind = channelKind(channel)
+        val crossWorkspace = channel[Channels.companyId] != companyId
+        val direct = kind == "DIRECT" || kind == "GROUP"
+        if ((crossWorkspace && !direct) || !canSeeChannel(userId, role, channel)) {
             throw AppException(HttpStatusCode.NotFound, "Không tìm thấy kênh chat")
         }
         return channel
