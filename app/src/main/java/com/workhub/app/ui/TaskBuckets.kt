@@ -17,6 +17,7 @@ enum class TaskScope {
 
 enum class TaskBucket {
     HUB,
+    OPEN,
     TODAY,
     OVERDUE,
     PRIORITIES,
@@ -34,7 +35,7 @@ fun TaskBucket.showsDayStrip(): Boolean = when (this) {
 }
 
 fun TaskBucket.showsViewSwitcher(): Boolean = when (this) {
-    TaskBucket.TODAY, TaskBucket.OVERDUE, TaskBucket.UPCOMING, TaskBucket.LIST, TaskBucket.MINE -> true
+    TaskBucket.OPEN, TaskBucket.TODAY, TaskBucket.OVERDUE, TaskBucket.UPCOMING, TaskBucket.LIST, TaskBucket.MINE -> true
     else -> false
 }
 
@@ -114,6 +115,8 @@ fun applyBucket(tasks: List<TaskDto>, bucket: TaskBucket, userId: String?, today
     val roots = tasks.filter { it.parentId == null }
     return when (bucket) {
         TaskBucket.HUB, TaskBucket.LIST -> roots
+        // All open roots — includes unassigned / no due date (matches Home "Cần làm").
+        TaskBucket.OPEN -> roots.filter(::isOpenTask)
         TaskBucket.TODAY -> roots.filter { task ->
             isOpenTask(task) && taskDueDate(task) == today
         }
@@ -128,8 +131,9 @@ fun applyBucket(tasks: List<TaskDto>, bucket: TaskBucket, userId: String?, today
         TaskBucket.UPCOMING -> roots.filter { task ->
             isOpenTask(task) && (taskDueDate(task)?.isAfter(today) == true)
         }
+        // Assigned to me OR created by me (unassigned self-created tasks still appear).
         TaskBucket.MINE -> roots.filter { task ->
-            isOpenTask(task) && isAssignedTo(task, userId)
+            isOpenTask(task) && (isAssignedTo(task, userId) || task.creatorId == userId)
         }
         TaskBucket.REMINDERS -> roots.filter { task ->
             isOpenTask(task) && task.dueAt != null && (isAssignedTo(task, userId) || task.creatorId == userId)

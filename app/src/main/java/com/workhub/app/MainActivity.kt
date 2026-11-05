@@ -18,7 +18,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        graph = AppGraph(applicationContext)
+        graph = AppGraph.get(applicationContext)
         graph.offerNotificationIntent(intent)
         setContent {
             CompositionLocalProvider(LocalAppGraph provides graph) {

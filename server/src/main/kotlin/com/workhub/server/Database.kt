@@ -380,6 +380,8 @@ object Messages : Table("messages") {
     val senderId = varchar("sender_id", ID_LEN).index()
     val body = varchar("body", 2000)
     val locationUrl = varchar("location_url", URL_LEN).nullable()
+    val taskId = varchar("task_id", ID_LEN).nullable()
+    val noteId = varchar("note_id", ID_LEN).nullable()
     val createdAt = sysCreatedAt()
     val updatedAt = sysUpdatedAt()
     val isActive = sysIsActive()

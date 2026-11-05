@@ -87,8 +87,7 @@ private fun LoginScreen(onRegister: () -> Unit) {
         serverUrl = graph.session.current().baseUrl
         val saved = graph.session.rememberedLogin()
         if (saved != null) {
-            login = saved.first
-            password = saved.second
+            login = saved
             rememberLogin = true
         }
     }
@@ -109,7 +108,7 @@ private fun LoginScreen(onRegister: () -> Unit) {
             if (vm.busy) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
                 Text(
-                    "Đang kết nối máy chủ (có thể mất ~30s nếu Render đang ngủ)…",
+                    "Đang kết nối máy chủ…",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -371,6 +370,12 @@ class AuthViewModel(private val graph: AppGraph) : ViewModel() {
     var error by mutableStateOf<String?>(null)
         private set
 
+    /** After an expired session the previous user's offline data is still on disk. */
+    private suspend fun dropOtherUsersData(userId: String) {
+        val previous = graph.session.current().user?.id
+        if (previous != null && previous != userId) graph.offline.clear()
+    }
+
     fun login(login: String, password: String, remember: Boolean, serverUrl: String) {
         viewModelScope.launch {
             busy = true
@@ -379,7 +384,8 @@ class AuthViewModel(private val graph: AppGraph) : ViewModel() {
                 graph.session.setBaseUrl(serverUrl)
                 // Render free may be asleep — ensureAwake() inside login waits for /health.
                 val response = graph.api.login(login.trim(), password)
-                if (remember) graph.session.rememberLogin(login.trim(), password) else graph.session.forgetLogin()
+                if (remember) graph.session.rememberLogin(login.trim()) else graph.session.forgetLogin()
+                dropOtherUsersData(response.user.id)
                 graph.session.save(response.token, response.user)
             } catch (e: Exception) {
                 error = e.userMessage()
@@ -397,6 +403,7 @@ class AuthViewModel(private val graph: AppGraph) : ViewModel() {
                 graph.session.setBaseUrl(serverUrl)
                 // ensureAwake() inside register waits while Render cold-starts.
                 val response = graph.api.register(request)
+                dropOtherUsersData(response.user.id)
                 graph.session.save(response.token, response.user)
             } catch (e: Exception) {
                 error = e.userMessage()

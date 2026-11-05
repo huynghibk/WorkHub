@@ -81,6 +81,7 @@ fun TaskHubScreen(
     val personalLists = filteredLists.filter { it.isPrivate }
     val teamLists = filteredLists.filter { !it.isPrivate }
 
+    val openCount = applyBucket(scoped, TaskBucket.OPEN, userId).size
     val todayCount = applyBucket(scoped, TaskBucket.TODAY, userId).size
     val overdueCount = applyBucket(scoped, TaskBucket.OVERDUE, userId).size
     val priorityCount = applyBucket(scoped, TaskBucket.PRIORITIES, userId).size
@@ -200,6 +201,15 @@ fun TaskHubScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HubStatCard(
+                        title = stringResource(R.string.home_open),
+                        count = openCount,
+                        icon = Icons.Filled.CheckCircle,
+                        tint = Color(0xFF059669),
+                        emphasize = openCount > 0,
+                        onClick = { onOpenBucket(TaskBucket.OPEN) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         HubStatCard(
                             title = stringResource(R.string.hub_today),

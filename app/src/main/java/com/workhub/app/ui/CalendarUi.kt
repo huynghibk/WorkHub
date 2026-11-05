@@ -56,11 +56,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.workhub.app.R
 import com.workhub.app.data.LocalAppGraph
-import com.workhub.app.data.WorkHubApi
+import com.workhub.app.data.OfflineStore
 import com.workhub.app.data.userMessage
 import com.workhub.shared.NoteDto
 import com.workhub.shared.TaskDto
@@ -72,6 +73,9 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class CalendarItem(
@@ -492,11 +496,13 @@ fun CalendarDayAgenda(
 @Composable
 fun WorkspaceCalendarScreen(onBack: () -> Unit) {
     val graph = LocalAppGraph.current
-    val vm: WorkspaceCalendarViewModel = viewModel(factory = workspaceCalendarFactory(graph.api))
+    val vm: WorkspaceCalendarViewModel = viewModel(factory = workspaceCalendarFactory(graph.offline))
+    val tasks by vm.tasks.collectAsStateWithLifecycle()
+    val notes by vm.notes.collectAsStateWithLifecycle()
     var month by remember { mutableStateOf(YearMonth.now()) }
     var selected by remember { mutableStateOf(LocalDate.now()) }
-    val items = remember(vm.tasks, vm.notes) {
-        tasksToCalendarItems(vm.tasks) + notesToCalendarItems(vm.notes)
+    val items = remember(tasks, notes) {
+        tasksToCalendarItems(tasks) + notesToCalendarItems(notes)
     }
     val byDay = remember(items) { items.groupBy { it.day } }
     val dayItems = byDay[selected].orEmpty().sortedBy { it.title }
@@ -555,11 +561,11 @@ fun WorkspaceCalendarScreen(onBack: () -> Unit) {
     }
 }
 
-class WorkspaceCalendarViewModel(private val api: WorkHubApi) : ViewModel() {
-    var tasks by mutableStateOf<List<TaskDto>>(emptyList())
-        private set
-    var notes by mutableStateOf<List<NoteDto>>(emptyList())
-        private set
+class WorkspaceCalendarViewModel(private val offline: OfflineStore) : ViewModel() {
+    val tasks: StateFlow<List<TaskDto>> =
+        offline.tasks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val notes: StateFlow<List<NoteDto>> =
+        offline.notes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var error by mutableStateOf<String?>(null)
         private set
 
@@ -570,17 +576,14 @@ class WorkspaceCalendarViewModel(private val api: WorkHubApi) : ViewModel() {
     fun refresh() {
         viewModelScope.launch {
             error = null
-            runCatching {
-                tasks = api.tasks()
-                notes = api.notes()
-            }.onFailure { error = it.userMessage() }
+            runCatching { offline.sync() }.onFailure { error = it.userMessage() }
         }
     }
 }
 
-private fun workspaceCalendarFactory(api: WorkHubApi) = object : ViewModelProvider.Factory {
+private fun workspaceCalendarFactory(offline: OfflineStore) = object : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return WorkspaceCalendarViewModel(api) as T
+        return WorkspaceCalendarViewModel(offline) as T
     }
 }

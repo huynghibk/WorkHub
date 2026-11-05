@@ -1,5 +1,7 @@
 package com.workhub.app.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,21 +9,26 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -33,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,24 +58,37 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.workhub.app.R
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.workhub.app.data.LocalAppGraph
-import com.workhub.app.data.WorkHubApi
+import com.workhub.app.data.OfflineStore
 import com.workhub.app.data.userMessage
 import com.workhub.shared.NoteDto
 import com.workhub.shared.NoteWrite
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun NoteScreen() {
     val graph = LocalAppGraph.current
     val session by graph.session.state.collectAsState(initial = null)
-    val vm: NoteViewModel = viewModel(factory = noteFactory(graph.api))
+    val vm: NoteViewModel = viewModel(factory = noteFactory(graph.offline))
+    val notes by vm.notes.collectAsStateWithLifecycle()
+    val syncError by graph.offline.syncError.collectAsStateWithLifecycle()
     var editor by remember { mutableStateOf<NoteDto?>(null) }
     var creating by remember { mutableStateOf(false) }
+    val pendingCreate by graph.pendingQuickCreate.collectAsState()
+    LaunchedEffect(pendingCreate) {
+        if (pendingCreate == "note") {
+            graph.pendingQuickCreate.value = null
+            creating = true
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -82,46 +103,47 @@ fun NoteScreen() {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { creating = true }) {
+            FloatingActionButton(
+                onClick = { creating = true },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
                 Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.add_note))
             }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            vm.error?.let {
+            (vm.error ?: syncError)?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp))
             }
-            if (vm.loading && vm.notes.isEmpty()) {
+            if (vm.loading && notes.isEmpty()) {
                 CircularProgressIndicator(Modifier.padding(24.dp))
-            } else if (vm.notes.isEmpty()) {
-                Text(stringResource(R.string.notes_empty), modifier = Modifier.padding(16.dp))
+            } else if (notes.isEmpty()) {
+                EmptyHint(
+                    title = stringResource(R.string.tab_notes),
+                    body = stringResource(R.string.empty_notes_cta),
+                    actionLabel = stringResource(R.string.add_note),
+                    onAction = { creating = true },
+                    icon = notesEmptyIcon(),
+                )
             } else {
-                androidx.compose.foundation.lazy.LazyColumn(
+                val canManage = canManageContent(session?.workspace?.role)
+                val myId = session?.user?.id
+                LazyColumn(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(vm.notes.size, key = { vm.notes[it].id }) { index ->
-                        val note = vm.notes[index]
-                        Card(onClick = { editor = note }, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(note.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (note.body.isNotBlank()) {
-                                    Text(note.body, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Text(
-                                    buildString {
-                                        append(note.authorName)
-                                        append(" \u00B7 ")
-                                        append(formatTime(note.updatedAt))
-                                        note.dueAt?.let {
-                                            append(" \u00B7 ")
-                                            append(formatDay(it))
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.outline,
-                                )
-                            }
+                    items(notes, key = { it.id }) { note ->
+                        val canDelete = canManage || note.authorId == myId
+                        SwipeRow(
+                            enableComplete = false,
+                            enableDelete = canDelete,
+                            onComplete = {},
+                            onDelete = { vm.delete(note.id) {} },
+                            modifier = Modifier.animateItem(),
+                        ) {
+                            NoteCard(note, onClick = { editor = note })
                         }
                     }
                 }
@@ -156,6 +178,37 @@ fun NoteScreen() {
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun NoteCard(note: NoteDto, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = noteWash()),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = BorderStroke(0.dp, Color.Transparent),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            Box(
+                Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(NoteRail),
+            )
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 14.dp).weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(note.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    InitialsAvatar(note.authorName)
+                }
+            }
+        }
     }
 }
 
@@ -205,6 +258,9 @@ private fun NoteEditor(
                 enabled = !saving,
                 locationUrl = locationUrl,
                 onLocationChange = { locationUrl = it },
+                onInsertText = { chunk ->
+                    body = if (body.isBlank()) chunk else body.trimEnd() + "\n" + chunk
+                },
             )
         } else if (!locationUrl.isNullOrBlank()) {
             AttachedLocationBar(locationUrl = locationUrl)
@@ -319,9 +375,9 @@ internal fun EditorDialog(
     }
 }
 
-class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
-    var notes by mutableStateOf<List<NoteDto>>(emptyList())
-        private set
+class NoteViewModel(private val offline: OfflineStore) : ViewModel() {
+    val notes: StateFlow<List<NoteDto>> =
+        offline.notes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var loading by mutableStateOf(true)
         private set
     var error by mutableStateOf<String?>(null)
@@ -344,7 +400,7 @@ class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
             loading = true
             error = null
             try {
-                notes = api.notes()
+                offline.sync()
             } catch (e: Exception) {
                 error = e.userMessage()
             } finally {
@@ -358,19 +414,8 @@ class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
             saving = true
             saveError = null
             try {
-                val saved = if (existing == null) {
-                    api.createNote(write)
-                } else {
-                    api.updateNote(existing.id, write)
-                }
-                // Keep UI in sync even if a follow-up list refresh fails (Render wake race).
-                notes = if (existing == null) {
-                    listOf(saved) + notes.filter { it.id != saved.id }
-                } else {
-                    notes.map { if (it.id == saved.id) saved else it }
-                }
+                offline.saveNote(existing, write)
                 onDone()
-                runCatching { notes = api.notes() }
             } catch (e: Exception) {
                 saveError = e.userMessage()
             } finally {
@@ -384,10 +429,8 @@ class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
             saving = true
             saveError = null
             try {
-                api.deleteNote(id)
-                notes = notes.filter { it.id != id }
+                offline.deleteNote(id)
                 onDone()
-                runCatching { notes = api.notes() }
             } catch (e: Exception) {
                 saveError = e.userMessage()
             } finally {
@@ -397,9 +440,9 @@ class NoteViewModel(private val api: WorkHubApi) : ViewModel() {
     }
 }
 
-private fun noteFactory(api: WorkHubApi) = object : ViewModelProvider.Factory {
+private fun noteFactory(offline: OfflineStore) = object : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return NoteViewModel(api) as T
+        return NoteViewModel(offline) as T
     }
 }

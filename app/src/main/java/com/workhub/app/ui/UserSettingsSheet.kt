@@ -107,6 +107,7 @@ fun UserSettingsSheet(
     val user = session?.user
     val workspace = session?.workspace
     val scope = rememberCoroutineScope()
+    val logout = rememberGuardedLogout()
     var page by remember { mutableStateOf("root") } // root | notifications | settings | profile
     var statusDraft by remember(settings.status) { mutableStateOf(settings.status) }
     var nameDraft by remember(user?.name, user?.id) { mutableStateOf(user?.name.orEmpty()) }
@@ -354,7 +355,7 @@ fun UserSettingsSheet(
                         },
                         onCustomizeNotifications = { page = "notifications" },
                         onOpenSettings = { page = "settings" },
-                        onLogout = { scope.launch { graph.session.clear() } },
+                        onLogout = logout,
                     )
                 }
             }

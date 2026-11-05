@@ -1,6 +1,13 @@
 package com.workhub.app.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,8 +32,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Send
@@ -47,6 +57,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.activity.compose.BackHandler
@@ -63,33 +75,60 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.workhub.app.R
+import com.workhub.app.data.ChatStore
 import com.workhub.app.data.LocalAppGraph
 import com.workhub.app.data.WorkHubApi
 import com.workhub.app.data.userMessage
 import com.workhub.shared.ChannelDto
 import com.workhub.shared.MemberDto
 import com.workhub.shared.MessageDto
+import com.workhub.shared.NoteDto
 import com.workhub.shared.SearchHit
+import com.workhub.shared.TaskDto
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(onOpenMaps: () -> Unit = {}) {
+fun ChatScreen(
+    onOpenMaps: () -> Unit = {},
+    onNavigateHome: () -> Unit = {},
+) {
     val graph = LocalAppGraph.current
     val session by graph.session.state.collectAsState(initial = null)
     val chromeVisible by graph.chatChromeVisible.collectAsState()
     val myId = session?.user?.id
     val vm: ChatViewModel = viewModel(factory = chatFactory(graph))
+    val allChannels by vm.channels.collectAsStateWithLifecycle()
+    val chatMessages by vm.messages.collectAsStateWithLifecycle()
+    val sendingIds by vm.pendingIds.collectAsStateWithLifecycle()
+    val failedIds by vm.failedIds.collectAsStateWithLifecycle()
+    val tasks by graph.offline.tasks.collectAsStateWithLifecycle(emptyList())
+    val notes by graph.offline.notes.collectAsStateWithLifecycle(emptyList())
+    val taskById = remember(tasks) { tasks.associateBy { it.id } }
+    val noteById = remember(notes) { notes.associateBy { it.id } }
+    var failedMessage by remember { mutableStateOf<MessageDto?>(null) }
+    val sendError by graph.chat.sendError.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -110,7 +149,7 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
         graph.pendingChatChannelId.collect { channelId ->
             if (channelId == null) return@collect
             graph.pendingChatChannelId.value = null
-            val match = vm.channels.firstOrNull { it.id == channelId }
+            val match = vm.channels.value.firstOrNull { it.id == channelId }
             if (match != null) {
                 vm.open(match)
             } else {
@@ -150,10 +189,10 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
     val mentionQuery = draft.substringAfterLast(' ').let { token ->
         if (token.startsWith("@")) token.drop(1) else null
     }
-    val channels = vm.channels.filter { it.kind.equals("CHANNEL", ignoreCase = true) || it.kind.isBlank() }
-    val directs = vm.channels.filter { it.kind.equals("DIRECT", ignoreCase = true) || it.kind.equals("DM", ignoreCase = true) }
-    val groups = vm.channels.filter { it.kind.equals("GROUP", ignoreCase = true) }
-    val otherChannels = vm.channels.filter { ch ->
+    val channels = allChannels.filter { it.kind.equals("CHANNEL", ignoreCase = true) || it.kind.isBlank() }
+    val directs = allChannels.filter { it.kind.equals("DIRECT", ignoreCase = true) || it.kind.equals("DM", ignoreCase = true) }
+    val groups = allChannels.filter { it.kind.equals("GROUP", ignoreCase = true) }
+    val otherChannels = allChannels.filter { ch ->
         channels.none { it.id == ch.id } && directs.none { it.id == ch.id } && groups.none { it.id == ch.id }
     }
 
@@ -162,8 +201,8 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
         onDispose { AppVisibility.channelId = null }
     }
 
-    LaunchedEffect(vm.messages.size) {
-        if (vm.messages.isNotEmpty()) listState.animateScrollToItem(vm.messages.lastIndex)
+    LaunchedEffect(chatMessages.size) {
+        if (chatMessages.isNotEmpty()) listState.animateScrollToItem(chatMessages.lastIndex)
     }
 
     fun openChannel(channel: ChannelDto) {
@@ -171,14 +210,18 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
         scope.launch { drawerState.close() }
     }
 
-    // Close drawer first; leave edge-swipe free for iOS-style back-to-home.
-    BackHandler(enabled = drawerState.isOpen) {
-        scope.launch { drawerState.close() }
+    // Close drawer first; otherwise go home (devices without edge gesture still need a path).
+    BackHandler(enabled = true) {
+        if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        } else {
+            onNavigateHome()
+        }
     }
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // Scrim tap + swipe dismiss (was false → sidebar opened but could not close).
-        gesturesEnabled = true,
+        // Open via menu button only so left-edge swipe can go Home; swipe still closes when open.
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
                 ChatSidebar(
@@ -242,19 +285,27 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                     }
                 },
                 navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            scope.launch {
-                                if (drawerState.isOpen) drawerState.close() else drawerState.open()
-                            }
-                        },
-                    ) {
-                        Icon(
-                            if (drawerState.isOpen) Icons.Filled.Close else Icons.Filled.Menu,
-                            contentDescription = stringResource(
-                                if (drawerState.isOpen) R.string.chat_close_sidebar else R.string.chat_open_sidebar,
-                            ),
-                        )
+                    Row {
+                        IconButton(onClick = onNavigateHome) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    if (drawerState.isOpen) drawerState.close() else drawerState.open()
+                                }
+                            },
+                        ) {
+                            Icon(
+                                if (drawerState.isOpen) Icons.Filled.Close else Icons.Filled.Menu,
+                                contentDescription = stringResource(
+                                    if (drawerState.isOpen) R.string.chat_close_sidebar else R.string.chat_open_sidebar,
+                                ),
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -328,7 +379,7 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
             vm.error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            if (vm.loading && vm.messages.isEmpty()) {
+            if (vm.loading && chatMessages.isEmpty()) {
                 CircularProgressIndicator(Modifier.padding(24.dp))
             }
             LazyColumn(
@@ -337,13 +388,67 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(vm.messages, key = { it.id }) { message ->
+                items(chatMessages, key = { it.id }) { message ->
                     MessageBubble(
                         message = message,
                         mine = message.senderId == myId,
+                        sending = message.id in sendingIds,
+                        onFailedTap = if (message.id in failedIds) ({ failedMessage = message }) else null,
                         onThread = if (vm.thread == null) ({ vm.openThread(message) }) else null,
-                        onMakeTask = { vm.makeTask(message) },
+                        onMakeTask = if (
+                            message.taskId == null && message.noteId == null &&
+                            message.id !in sendingIds && message.id !in failedIds
+                        ) {
+                            { vm.makeTask(message) }
+                        } else {
+                            null
+                        },
+                        task = message.taskId?.let(taskById::get),
+                        note = message.noteId?.let(noteById::get),
+                        modifier = Modifier.animateItem(),
                     )
+                }
+            }
+            failedMessage?.let { message ->
+                ModalBottomSheet(
+                    onDismissRequest = { failedMessage = null },
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .padding(bottom = 28.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.chat_failed),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        sendError?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        SoftPrimaryButton(
+                            text = stringResource(R.string.chat_retry),
+                            onClick = { vm.retry(message); failedMessage = null },
+                        )
+                        SoftPrimaryButton(
+                            text = stringResource(R.string.chat_copy_text),
+                            onClick = {
+                                copyTextToClipboard(context, message.body)
+                                failedMessage = null
+                            },
+                        )
+                        TextButton(
+                            onClick = { vm.discard(message); failedMessage = null },
+                            modifier = Modifier.fillMaxWidth().height(TouchTarget),
+                        ) {
+                            Text(stringResource(R.string.chat_delete_message), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
                 }
             }
             if (mentionQuery != null) {
@@ -429,8 +534,17 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f),
                     placeholder = {
-                        Text(if (vm.thread == null) stringResource(R.string.chat_hint) else stringResource(R.string.chat_reply_hint))
+                        Text(
+                            if (vm.thread == null) {
+                                stringResource(R.string.chat_hint)
+                            } else {
+                                stringResource(R.string.chat_reply_hint)
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     },
+                    singleLine = false,
                     maxLines = 4,
                     trailingIcon = if (draft.isNotEmpty()) {
                         { TextFieldClearCopyActions(value = draft, onClear = { draft = "" }) }
@@ -487,7 +601,7 @@ fun ChatScreen(onOpenMaps: () -> Unit = {}) {
                 TextButton(onClick = {
                     searching = false
                     if (hit.kind == "message" && hit.channelId != null) {
-                        vm.channels.firstOrNull { it.id == hit.channelId }?.let(vm::open)
+                        allChannels.firstOrNull { it.id == hit.channelId }?.let(vm::open)
                     }
                 }) { Text("${hit.title}: ${hit.snippet}") }
             }
@@ -721,52 +835,106 @@ private fun SidebarChannelRow(
 }
 
 @Composable
+private fun SendingClock() {
+    val spin = rememberInfiniteTransition(label = "send")
+    val angle by spin.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing)),
+        label = "sendAngle",
+    )
+    Icon(
+        Icons.Outlined.Schedule,
+        contentDescription = stringResource(R.string.chat_sending),
+        modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = angle },
+        tint = MaterialTheme.colorScheme.outline,
+    )
+}
+
+@Composable
 private fun MessageBubble(
     message: MessageDto,
     mine: Boolean,
+    sending: Boolean,
+    onFailedTap: (() -> Unit)?,
     onThread: (() -> Unit)?,
-    onMakeTask: () -> Unit,
+    onMakeTask: (() -> Unit)?,
+    task: TaskDto? = null,
+    note: NoteDto? = null,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val failed = onFailedTap != null
     val mapsUrl = message.locationUrl?.takeIf { it.isNotBlank() }
         ?: Regex("""https?://(?:www\.)?(?:maps\.google\.com|google\.com/maps)[^\s]*""")
             .find(message.body)?.value
+    val sharedTask = message.taskId != null
+    val sharedNote = message.noteId != null
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(if (failed) Modifier.clickable(onClick = onFailedTap!!) else Modifier),
         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
     ) {
         if (!mine) {
             Text(message.senderName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         }
-        if (message.body.isNotBlank()) {
+        if (sharedTask || sharedNote) {
+            EntityRailCard(
+                task = sharedTask,
+                title = task?.title ?: note?.title ?: message.body,
+                subtitle = task?.let { statusLabel(it.status) } ?: note?.body?.takeIf { it.isNotBlank() },
+                modifier = Modifier.widthIn(max = 280.dp),
+            )
+        } else if (message.body.isNotBlank()) {
+            val bubbleColor = when {
+                failed -> MaterialTheme.colorScheme.errorContainer
+                mine -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.surfaceVariant
+            }
+            val textColor = when {
+                failed -> MaterialTheme.colorScheme.onErrorContainer
+                mine -> MaterialTheme.colorScheme.onPrimary
+                else -> MaterialTheme.colorScheme.onSurface
+            }
             Box(
                 modifier = Modifier
                     .widthIn(max = 280.dp)
-                    .background(
-                        color = if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(16.dp),
+                    .then(
+                        if (failed) Modifier.border(1.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+                        else Modifier,
                     )
+                    .background(color = bubbleColor, shape = RoundedCornerShape(16.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Text(
-                    message.body,
-                    color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                )
+                Text(message.body, color = textColor)
             }
         }
         if (mapsUrl != null) {
             TextButton(
-                onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl)))
-                },
+                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl))) },
+                modifier = Modifier.height(TouchTarget),
             ) {
                 Text(stringResource(R.string.location_attached_label))
             }
         }
-        Text(formatTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(formatTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            if (sending) {
+                SendingClock()
+            }
+            if (failed) {
+                Icon(
+                    Icons.Filled.Error,
+                    contentDescription = stringResource(R.string.chat_failed),
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
         Row {
             if (onThread != null) {
-                TextButton(onClick = onThread) {
+                TextButton(onClick = onThread, modifier = Modifier.height(TouchTarget)) {
                     Text(
                         if (message.replyCount > 0) {
                             stringResource(R.string.thread_count, message.replyCount)
@@ -776,23 +944,36 @@ private fun MessageBubble(
                     )
                 }
             }
-            TextButton(onClick = onMakeTask) { Text(stringResource(R.string.make_task)) }
+            if (onMakeTask != null) {
+                TextButton(onClick = onMakeTask, modifier = Modifier.height(TouchTarget)) {
+                    Text(stringResource(R.string.make_task))
+                }
+            }
         }
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModel(
     private val api: WorkHubApi,
     private val realtime: com.workhub.app.data.RealtimeHub,
+    private val chat: ChatStore,
 ) : ViewModel() {
-    var channels by mutableStateOf<List<ChannelDto>>(emptyList())
-        private set
+    /** Eager: the view model itself looks up channels by id. */
+    val channels: StateFlow<List<ChannelDto>> =
+        chat.channels.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     var channel by mutableStateOf<ChannelDto?>(null)
-        private set
-    var messages by mutableStateOf<List<MessageDto>>(emptyList())
         private set
     var thread by mutableStateOf<MessageDto?>(null)
         private set
+    private val selection = MutableStateFlow<Pair<String, String?>?>(null)
+    val messages: StateFlow<List<MessageDto>> = selection
+        .flatMapLatest { picked -> if (picked == null) flowOf(emptyList()) else chat.messages(picked.first, picked.second) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val pendingIds: StateFlow<Set<String>> =
+        chat.pendingIds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    val failedIds: StateFlow<Set<String>> =
+        chat.failedIds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
     var members by mutableStateOf<List<MemberDto>>(emptyList())
         private set
     var loading by mutableStateOf(true)
@@ -807,16 +988,22 @@ class ChatViewModel(
     init {
         refresh()
         viewModelScope.launch {
-            realtime.connected.collect { live = it }
-        }
-        viewModelScope.launch {
-            realtime.events.collect { event ->
-                val incoming = event.message
-                if (event.type == "message" && incoming != null && incoming.channelId == channel?.id) {
-                    add(incoming)
-                }
+            realtime.connected.collect { connected ->
+                // Pull what was missed while the socket was down.
+                if (connected && !live) refreshQuiet()
+                live = connected
             }
         }
+        viewModelScope.launch {
+            val cached = channels.first { it.isNotEmpty() }
+            if (channel == null) select(cached.first(), null)
+        }
+    }
+
+    private fun select(next: ChannelDto?, root: MessageDto?) {
+        channel = next
+        thread = root
+        selection.value = next?.let { it.id to root?.id }
     }
 
     fun refresh() {
@@ -824,13 +1011,14 @@ class ChatViewModel(
             loading = true
             error = null
             try {
-                channels = api.channels()
+                val list = chat.refreshChannels()
                 members = api.members()
-                val selected = channel?.let { current -> channels.firstOrNull { it.id == current.id } } ?: channels.firstOrNull()
-                channel = selected
-                messages = if (selected == null) emptyList() else api.messages(selected.id, thread?.id)
+                val selected = channel?.let { current -> list.firstOrNull { it.id == current.id } } ?: list.firstOrNull()
+                select(selected, thread?.takeIf { selected?.id == channel?.id })
+                selected?.let { chat.refreshMessages(it.id, thread?.id) }
             } catch (e: Exception) {
-                error = e.userMessage()
+                // Offline with a cached history is normal: keep showing it.
+                if (channels.value.isEmpty()) error = e.userMessage()
             } finally {
                 loading = false
             }
@@ -839,72 +1027,42 @@ class ChatViewModel(
 
     /** Resume without full-screen loading spinner. */
     fun refreshQuiet() {
+        val selected = channel ?: return
+        val root = thread?.id
         viewModelScope.launch {
-            try {
-                val selected = channel ?: return@launch
-                messages = api.messages(selected.id, thread?.id)
-                error = null
-            } catch (_: Exception) {
-                // Keep previous messages; realtime will reconnect separately.
-            }
+            runCatching { chat.refreshMessages(selected.id, root) }
         }
     }
 
     fun open(next: ChannelDto) {
-        channel = next
-        thread = null
-        viewModelScope.launch {
-            try {
-                messages = api.messages(next.id)
-            } catch (e: Exception) {
-                error = e.userMessage()
-            }
-        }
+        select(next, null)
+        refreshQuiet()
     }
 
     fun openById(channelId: String) {
         viewModelScope.launch {
-            try {
-                if (channels.none { it.id == channelId }) {
-                    channels = api.channels()
-                }
-                val match = channels.firstOrNull { it.id == channelId } ?: return@launch
-                open(match)
-            } catch (e: Exception) {
-                error = e.userMessage()
-            }
+            val match = channels.value.firstOrNull { it.id == channelId }
+                ?: runCatching { chat.refreshChannels() }.getOrNull()?.firstOrNull { it.id == channelId }
+                ?: return@launch
+            open(match)
         }
     }
 
     fun openThread(message: MessageDto) {
-        val selected = channel ?: return
-        thread = message
-        viewModelScope.launch {
-            try {
-                messages = api.messages(selected.id, message.id)
-            } catch (e: Exception) {
-                error = e.userMessage()
-            }
-        }
+        select(channel ?: return, message)
+        refreshQuiet()
     }
 
     fun closeThread() {
-        val selected = channel ?: return
-        thread = null
-        viewModelScope.launch {
-            try {
-                messages = api.messages(selected.id)
-            } catch (e: Exception) {
-                error = e.userMessage()
-            }
-        }
+        select(channel ?: return, null)
+        refreshQuiet()
     }
 
     fun createChannel(name: String, isPrivate: Boolean) {
         viewModelScope.launch {
             try {
                 val created = api.createChannel(name, isPrivate)
-                channels = api.channels()
+                chat.refreshChannels()
                 open(created)
             } catch (e: Exception) {
                 error = e.userMessage()
@@ -916,8 +1074,8 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 api.addChannelMember(channelId, userId)
-                channels = api.channels()
-                channel = channels.firstOrNull { it.id == channelId } ?: channel
+                val list = chat.refreshChannels()
+                list.firstOrNull { it.id == channelId }?.let { select(it, thread) }
             } catch (e: Exception) {
                 error = e.userMessage()
             }
@@ -928,7 +1086,7 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 val created = api.openDirect(userId)
-                channels = api.channels()
+                chat.refreshChannels()
                 open(created)
             } catch (e: Exception) {
                 error = e.userMessage()
@@ -940,7 +1098,7 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 val created = api.openGroup(name, memberIds)
-                channels = api.channels()
+                chat.refreshChannels()
                 open(created)
             } catch (e: Exception) {
                 error = e.userMessage()
@@ -949,6 +1107,10 @@ class ChatViewModel(
     }
 
     fun makeTask(message: MessageDto) {
+        if (message.id in pendingIds.value || message.id in failedIds.value) {
+            error = "Tin nhắn chưa gửi xong, hãy thử lại khi có mạng"
+            return
+        }
         viewModelScope.launch {
             banner = null
             error = null
@@ -975,33 +1137,28 @@ class ChatViewModel(
     fun send(body: String, locationUrl: String? = null) {
         val selected = channel ?: return
         if (body.isBlank() && locationUrl.isNullOrBlank()) return
+        val root = thread?.id
         viewModelScope.launch {
             try {
-                val saved = api.sendMessage(selected.id, body.trim(), thread?.id, locationUrl)
-                add(saved)
+                chat.send(selected.id, body, root, locationUrl)
             } catch (e: Exception) {
                 error = e.userMessage()
             }
         }
     }
 
-    private fun add(message: MessageDto) {
-        viewModelScope.launch {
-            val viewing = thread?.id
-            if (message.parentId == viewing) {
-                if (messages.none { it.id == message.id }) messages = messages + message
-            } else if (viewing == null && message.parentId != null) {
-                messages = messages.map { item ->
-                    if (item.id == message.parentId) item.copy(replyCount = item.replyCount + 1) else item
-                }
-            }
-        }
+    fun retry(message: MessageDto) {
+        viewModelScope.launch { chat.retry(message.id) }
+    }
+
+    fun discard(message: MessageDto) {
+        viewModelScope.launch { chat.discard(message.id) }
     }
 }
 
 private fun chatFactory(graph: com.workhub.app.data.AppGraph) = object : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return ChatViewModel(graph.api, graph.realtime) as T
+        return ChatViewModel(graph.api, graph.realtime, graph.chat) as T
     }
 }

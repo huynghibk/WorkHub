@@ -28,7 +28,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -49,15 +48,13 @@ fun copyTextToClipboard(context: Context, text: String): Boolean {
 internal val SoftPill = RoundedCornerShape(14.dp)
 internal val SoftCard = RoundedCornerShape(16.dp)
 internal val SoftRadius = 14.dp
-internal val BorderSubtle = Color(0xFFE5E7EB)
-internal val PageBg = Color(0xFFF9FAFB)
 
 @Composable
 internal fun SoftBackdrop(content: @Composable BoxScope.() -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(PageBg),
+            .background(MaterialTheme.colorScheme.background),
         content = content,
     )
 }
@@ -68,11 +65,7 @@ internal fun SoftHeroBand(height: Dp = 220.dp) {
         modifier = Modifier
             .fillMaxWidth()
             .height(height)
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFFEEF2FF), Color(0xFFF9FAFB), Color.Transparent),
-                ),
-            ),
+            .background(MaterialTheme.colorScheme.background),
     )
 }
 
@@ -121,7 +114,7 @@ internal fun TextFieldClearCopyActions(
                     Toast.LENGTH_SHORT,
                 ).show()
             },
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(TouchTarget),
         ) {
             Icon(
                 Icons.Filled.ContentCopy,
@@ -130,7 +123,7 @@ internal fun TextFieldClearCopyActions(
             )
         }
         if (showClear) {
-            IconButton(onClick = onClear, modifier = Modifier.size(40.dp)) {
+            IconButton(onClick = onClear, modifier = Modifier.size(TouchTarget)) {
                 Icon(
                     Icons.Filled.Close,
                     contentDescription = stringResource(R.string.clear_text),
@@ -168,15 +161,16 @@ internal fun SoftField(
             null
         },
         colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = Color.White,
-            unfocusedContainerColor = Color.White,
-            disabledContainerColor = Color(0xFFF9FAFB),
+            focusedContainerColor = MaterialTheme.colorScheme.surface,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
             focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = BorderSubtle,
-            disabledBorderColor = BorderSubtle,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+            disabledBorderColor = MaterialTheme.colorScheme.outline,
         ),
     )
 }
 
+@Composable
 fun Modifier.softCardChrome(): Modifier =
-    border(1.dp, BorderSubtle, SoftCard)
+    border(1.dp, MaterialTheme.colorScheme.outline, SoftCard)

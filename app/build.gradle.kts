@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     kotlin("android")
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -55,7 +56,7 @@ android {
 dependencies {
     implementation(project(":shared"))
 
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+    val composeBom = platform("androidx.compose:compose-bom:2025.02.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -71,6 +72,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     implementation("io.ktor:ktor-client-okhttp:2.3.12")
     implementation("io.ktor:ktor-client-content-negotiation:2.3.12")

@@ -439,6 +439,13 @@ internal fun TaskEditor(
                         LocationAttachActions(
                             locationUrl = locationUrl,
                             onLocationChange = { locationUrl = it },
+                            onInsertText = { chunk ->
+                                description = if (description.isBlank()) {
+                                    chunk
+                                } else {
+                                    description.trimEnd() + "\n" + chunk
+                                }
+                            },
                         )
                     } else if (!locationUrl.isNullOrBlank()) {
                         AttachedLocationBar(locationUrl = locationUrl)

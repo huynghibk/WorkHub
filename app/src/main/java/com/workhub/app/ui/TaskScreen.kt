@@ -1,6 +1,7 @@
 ﻿package com.workhub.app.ui
 
 import android.app.DatePickerDialog
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -27,6 +28,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ViewList
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.DisposableEffect
@@ -51,7 +54,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,10 +75,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.workhub.app.R
+import com.workhub.app.data.AppGraph
 import com.workhub.app.data.LocalAppGraph
+import com.workhub.app.data.OfflineStore
 import com.workhub.app.data.WorkHubApi
 import com.workhub.app.data.userMessage
 import com.workhub.shared.CommentDto
@@ -88,13 +93,18 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TaskScreen() {
     val graph = LocalAppGraph.current
-    val vm: TaskViewModel = viewModel(factory = taskFactory(graph.api))
+    val vm: TaskViewModel = viewModel(factory = taskFactory(graph))
+    val tasks by vm.tasks.collectAsStateWithLifecycle()
+    val syncError by graph.offline.syncError.collectAsStateWithLifecycle()
     val session by graph.session.state.collectAsState(initial = null)
     val user = session?.user
     val workspace = session?.workspace
@@ -109,11 +119,18 @@ fun TaskScreen() {
     var editor by remember { mutableStateOf<TaskDto?>(null) }
     var creating by remember { mutableStateOf(false) }
     var structuring by remember { mutableStateOf(false) }
+    val pendingCreate by graph.pendingQuickCreate.collectAsState()
+    LaunchedEffect(pendingCreate) {
+        if (pendingCreate == "task") {
+            graph.pendingQuickCreate.value = null
+            creating = true
+        }
+    }
     val lists = remember(vm.work) { flattenLists(vm.work) }
     val selectedList = lists.firstOrNull { it.id == vm.selectedListId }
     val isAdmin = canManageContent(workspace?.role)
-    val scoped = remember(vm.tasks, scope, user?.id, vm.work, isAdmin) {
-        applyScope(vm.tasks, scope, user?.id, vm.work, isAdmin)
+    val scoped = remember(tasks, scope, user?.id, vm.work, isAdmin) {
+        applyScope(tasks, scope, user?.id, vm.work, isAdmin)
     }
     val bucketed = remember(scoped, bucket, user?.id, selectedList?.id) {
         when (bucket) {
@@ -150,6 +167,7 @@ fun TaskScreen() {
     }
     val functionTitle = when (bucket) {
         TaskBucket.HUB -> stringResource(R.string.my_tasks_title)
+        TaskBucket.OPEN -> stringResource(R.string.home_open)
         TaskBucket.TODAY -> if (showDayStrip) dayStripTitle(daySelection) else stringResource(R.string.hub_today)
         TaskBucket.OVERDUE -> stringResource(R.string.hub_overdue)
         TaskBucket.PRIORITIES -> stringResource(R.string.hub_priorities)
@@ -272,14 +290,19 @@ fun TaskScreen() {
         },
         floatingActionButton = {
             if (bucket.allowsCreate()) {
-                FloatingActionButton(onClick = { creating = true }) {
+                FloatingActionButton(
+                    onClick = { creating = true },
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) {
                     Icon(Icons.Filled.Add, contentDescription = createLabel)
                 }
             }
         },
     ) { padding ->
         if (bucket == TaskBucket.HUB) {
-            if (vm.loading && vm.tasks.isEmpty()) {
+            if (vm.loading && tasks.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -288,7 +311,7 @@ fun TaskScreen() {
                     workspace = workspace,
                     userId = user?.id,
                     userName = user?.name,
-                    tasks = vm.tasks,
+                    tasks = tasks,
                     work = vm.work,
                     scope = scope,
                     search = search,
@@ -330,7 +353,7 @@ fun TaskScreen() {
                         onSelect = { daySelection = it },
                     )
                 }
-                vm.error?.let {
+                (vm.error ?: syncError)?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp))
                 }
                 if (vm.loading && shown.isEmpty()) {
@@ -354,7 +377,24 @@ fun TaskScreen() {
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(shown, key = { it.id }) { task ->
-                            TaskCard(task, onClick = { editor = task })
+                            val canEdit = canEditTask(task, user?.id)
+                            SwipeRow(
+                                enableComplete = canEdit && normalizeStatus(task.status) != "DONE",
+                                enableDelete = canEdit,
+                                onComplete = { vm.move(task, "DONE") },
+                                onDelete = { vm.delete(task.id) {} },
+                                modifier = Modifier.animateItem(),
+                            ) {
+                                TaskCard(
+                                    task = task,
+                                    onClick = { editor = task },
+                                    onComplete = if (canEdit && normalizeStatus(task.status) != "DONE") {
+                                        { vm.move(task, "DONE") }
+                                    } else {
+                                        null
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -385,9 +425,9 @@ fun TaskScreen() {
             members = vm.members,
             listId = editing?.listId ?: selectedList?.id,
             currentUserId = user?.id,
-            allTasks = vm.tasks,
+            allTasks = tasks,
             comments = if (editing == null) emptyList() else vm.comments,
-            subtasks = vm.tasks.filter { it.parentId == editing?.id && editing != null },
+            subtasks = tasks.filter { it.parentId == editing?.id && editing != null },
             canSave = editing == null || canEditTask(editing, user?.id),
             defaultDueAt = if (editing == null && bucket.allowsCreate()) createDueAt else null,
             onDismiss = { creating = false; editor = null },
@@ -421,9 +461,9 @@ fun TaskScreen() {
     }
 }
 
-class TaskViewModel(private val api: WorkHubApi) : ViewModel() {
-    var tasks by mutableStateOf<List<TaskDto>>(emptyList())
-        private set
+class TaskViewModel(private val api: WorkHubApi, private val offline: OfflineStore) : ViewModel() {
+    val tasks: StateFlow<List<TaskDto>> =
+        offline.tasks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var members by mutableStateOf<List<MemberDto>>(emptyList())
         private set
     var work by mutableStateOf(WorkTree())
@@ -450,10 +490,10 @@ class TaskViewModel(private val api: WorkHubApi) : ViewModel() {
             loading = true
             error = null
             try {
-                tasks = api.tasks()
                 members = api.members()
                 work = api.workTree()
                 if (selectedListId == null) selectedListId = flattenLists(work).firstOrNull()?.id
+                offline.sync()
             } catch (e: Exception) {
                 error = e.userMessage()
             } finally {
@@ -465,8 +505,7 @@ class TaskViewModel(private val api: WorkHubApi) : ViewModel() {
     fun save(existing: TaskDto?, write: TaskWrite, onDone: () -> Unit = {}, onError: (String) -> Unit = {}) {
         viewModelScope.launch {
             try {
-                if (existing == null) api.createTask(write) else api.updateTask(existing.id, write)
-                refresh()
+                offline.saveTask(existing, write, memberNames(), listNames())
                 onDone()
             } catch (e: Exception) {
                 val message = e.userMessage()
@@ -483,8 +522,7 @@ class TaskViewModel(private val api: WorkHubApi) : ViewModel() {
     fun delete(id: String, onDone: () -> Unit) {
         viewModelScope.launch {
             try {
-                api.deleteTask(id)
-                refresh()
+                offline.deleteTask(id)
                 onDone()
             } catch (e: Exception) {
                 error = e.userMessage()
@@ -516,8 +554,12 @@ class TaskViewModel(private val api: WorkHubApi) : ViewModel() {
     fun addSubtask(parent: TaskDto, title: String) {
         viewModelScope.launch {
             try {
-                api.createTask(TaskWrite(title = title, listId = parent.listId, parentId = parent.id))
-                refresh()
+                offline.saveTask(
+                    null,
+                    TaskWrite(title = title, listId = parent.listId, parentId = parent.id),
+                    memberNames(),
+                    listNames(),
+                )
             } catch (e: Exception) {
                 error = e.userMessage()
             }
@@ -539,6 +581,12 @@ class TaskViewModel(private val api: WorkHubApi) : ViewModel() {
             }
         }
     }
+
+    private fun memberNames() = members.associate { it.id to it.name }
+
+    private fun listNames() = work.spaces.flatMap { space ->
+        space.lists + space.folders.flatMap { it.lists }
+    }.associate { it.id to it.name }
 
     private fun structure(call: suspend () -> Unit, onDone: () -> Unit) {
         viewModelScope.launch {
@@ -568,10 +616,10 @@ private fun TaskDto.write(status: String = this.status) = TaskWrite(
     locationUrl = locationUrl,
 )
 
-private fun taskFactory(api: WorkHubApi) = object : ViewModelProvider.Factory {
+private fun taskFactory(graph: AppGraph) = object : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return TaskViewModel(api) as T
+        return TaskViewModel(graph.api, graph.offline) as T
     }
 }
 
@@ -755,86 +803,75 @@ private fun TaskEmptyState(
     createLabel: String,
     onCreate: (() -> Unit)?,
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            when (bucket) {
-                TaskBucket.MINE -> stringResource(R.string.hub_empty_mine_title)
-                TaskBucket.REMINDERS -> stringResource(R.string.hub_empty_reminders_title)
-                TaskBucket.COMMENTS -> stringResource(R.string.hub_empty_comments_title)
-                TaskBucket.PRIORITIES -> stringResource(R.string.hub_empty_priorities_title)
-                TaskBucket.OVERDUE -> stringResource(R.string.hub_empty_overdue_title)
-                else -> stringResource(R.string.hub_empty_generic_title)
-            },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-        )
-        Text(
-            when (bucket) {
-                TaskBucket.MINE -> stringResource(R.string.hub_empty_mine_body)
-                TaskBucket.REMINDERS -> stringResource(R.string.hub_empty_reminders_body)
-                TaskBucket.COMMENTS -> stringResource(R.string.hub_empty_comments_body)
-                TaskBucket.PRIORITIES -> stringResource(R.string.hub_empty_priorities_body)
-                else -> stringResource(R.string.hub_empty_generic_body)
-            },
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 20.dp),
-        )
-        if (onCreate != null) {
-            SoftPrimaryButton(text = createLabel, onClick = onCreate)
-        }
-    }
+    EmptyHint(
+        title = when (bucket) {
+            TaskBucket.MINE -> stringResource(R.string.hub_empty_mine_title)
+            TaskBucket.REMINDERS -> stringResource(R.string.hub_empty_reminders_title)
+            TaskBucket.COMMENTS -> stringResource(R.string.hub_empty_comments_title)
+            TaskBucket.PRIORITIES -> stringResource(R.string.hub_empty_priorities_title)
+            TaskBucket.OVERDUE -> stringResource(R.string.hub_empty_overdue_title)
+            else -> stringResource(R.string.hub_empty_generic_title)
+        },
+        body = when (bucket) {
+            TaskBucket.MINE -> stringResource(R.string.hub_empty_mine_body)
+            TaskBucket.REMINDERS -> stringResource(R.string.hub_empty_reminders_body)
+            TaskBucket.COMMENTS -> stringResource(R.string.hub_empty_comments_body)
+            TaskBucket.PRIORITIES -> stringResource(R.string.hub_empty_priorities_body)
+            else -> stringResource(R.string.hub_empty_generic_body)
+        },
+        actionLabel = createLabel,
+        onAction = onCreate,
+    )
 }
 
 @Composable
-private fun TaskCard(task: TaskDto, onClick: () -> Unit) {
+private fun TaskCard(
+    task: TaskDto,
+    onClick: () -> Unit,
+    onComplete: (() -> Unit)? = null,
+    showStatus: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val done = normalizeStatus(task.status) == "DONE"
+    val people = task.assigneeNames.ifEmpty { listOfNotNull(task.assigneeName) }
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shape = RoundedCornerShape(16.dp),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(task.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                StatusPill(statusLabel(task.status))
-                StatusPill(priorityLabel(task.priority))
+        Row(
+            Modifier.padding(start = 4.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            IconButton(
+                onClick = { onComplete?.invoke() },
+                enabled = onComplete != null,
+                modifier = Modifier.size(TouchTarget),
+            ) {
+                Icon(
+                    if (done) Icons.Filled.CheckCircle else Icons.Outlined.CheckCircle,
+                    contentDescription = stringResource(R.string.swipe_complete),
+                    tint = if (done) DoneGreen else MaterialTheme.colorScheme.outline,
+                )
             }
-            val people = task.assigneeNames.ifEmpty { listOfNotNull(task.assigneeName) }
-            val peopleLabel = if (people.isEmpty()) {
-                stringResource(R.string.unassigned)
-            } else {
-                stringResource(R.string.assigned_to, people.joinToString(", "))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(task.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (showStatus) StatusBadge(task.status)
+                    PriorityChip(task.priority)
+                    people.take(3).forEach { InitialsAvatar(it) }
+                    Spacer(Modifier.weight(1f))
+                    CommentCount(task.commentCount)
+                }
             }
-            val startDay = task.startAt?.let { formatDay(it) }
-            val endDay = task.dueAt?.let { formatDay(it) }
-            val startLabel = if (startDay != null) stringResource(R.string.start_short, startDay) else null
-            val endLabel = if (endDay != null) stringResource(R.string.end_short, endDay) else null
-            val subLabel = if (task.subtaskCount > 0) stringResource(R.string.subtask_count, task.subtaskCount) else null
-            Text(
-                listOfNotNull(peopleLabel, startLabel, endLabel, subLabel).joinToString(" \u00B7 "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
-    }
-}
-
-@Composable
-private fun StatusPill(label: String) {
-    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.primaryContainer) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
     }
 }
 
@@ -853,14 +890,22 @@ private fun BoardView(
             Column(Modifier.width(240.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(statusLabel(status), style = MaterialTheme.typography.titleMedium)
                 tasks.filter { it.status == status }.forEach { task ->
-                    Card(onClick = { onOpen(task) }, modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(task.title, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            if (canMove(task)) {
-                                TextButton(onClick = { onMove(task, nextStatus(task.status)) }) {
-                                    Text(stringResource(R.string.move_to, statusLabel(nextStatus(task.status))))
-                                }
-                            }
+                    TaskCard(
+                        task = task,
+                        onClick = { onOpen(task) },
+                        showStatus = false,
+                        onComplete = if (canMove(task) && status != "DONE") {
+                            { onMove(task, "DONE") }
+                        } else {
+                            null
+                        },
+                    )
+                    if (canMove(task) && status != "DONE") {
+                        TextButton(
+                            onClick = { onMove(task, nextStatus(task.status)) },
+                            modifier = Modifier.heightIn(min = TouchTarget),
+                        ) {
+                            Text(stringResource(R.string.move_to, statusLabel(nextStatus(task.status))))
                         }
                     }
                 }

@@ -59,6 +59,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
@@ -76,10 +77,12 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.count
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
@@ -96,6 +99,8 @@ fun main() {
         .start(wait = true)
 }
 
+private const val SERVER_TIME_HEADER = "X-Server-Time"
+
 fun Application.module() {
     DatabaseFactory.init()
     install(CallLogging)
@@ -108,6 +113,7 @@ fun Application.module() {
         allowHeader(io.ktor.http.HttpHeaders.Authorization)
         allowHeader(io.ktor.http.HttpHeaders.ContentType)
         allowHeader("X-Workspace-Id")
+        exposeHeader(SERVER_TIME_HEADER)
         allowMethod(io.ktor.http.HttpMethod.Get)
         allowMethod(io.ktor.http.HttpMethod.Post)
         allowMethod(io.ktor.http.HttpMethod.Put)
@@ -138,6 +144,10 @@ fun Application.module() {
                 call.respond(HttpStatusCode.InternalServerError, ErrorResponse(text))
             }
         }
+    }
+    // Lets clients correct their clock before stamping offline edits (last-write-wins).
+    intercept(ApplicationCallPipeline.Plugins) {
+        call.response.header(SERVER_TIME_HEADER, System.currentTimeMillis().toString())
     }
     routing {
         get("/") {
@@ -240,18 +250,23 @@ fun Application.module() {
                 get { call.respond(Repository.tasks(call.companyId(), call.userId(), call.memberRole())) }
                 post {
                     val created = Repository.createTask(call.companyId(), call.userId(), call.memberRole(), call.receive())
+                    Repository.publishTask(call.companyId(), created)
                     call.respond(HttpStatusCode.Created, created)
                 }
                 put("/{id}") {
-                    call.respond(Repository.updateTask(call.companyId(), call.userId(), call.memberRole(), call.taskId(), call.receive()))
+                    val saved = Repository.upsertTask(call.companyId(), call.userId(), call.memberRole(), call.taskId(), call.receive())
+                    Repository.publishTask(call.companyId(), saved)
+                    call.respond(saved)
                 }
                 delete("/{id}") {
                     Repository.deleteTask(call.companyId(), call.userId(), call.memberRole(), call.taskId())
+                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("task_delete", deletedId = call.taskId())))
                     call.respond(HttpStatusCode.NoContent)
                 }
                 get("/{id}/comments") { call.respond(Repository.comments(call.companyId(), call.userId(), call.memberRole(), call.taskId())) }
                 post("/{id}/comments") {
                     val created = Repository.addComment(call.companyId(), call.userId(), call.memberRole(), call.taskId(), call.receive<CommentWrite>().body)
+                    Repository.publishTask(call.companyId(), Repository.task(call.companyId(), call.taskId()))
                     call.respond(HttpStatusCode.Created, created)
                 }
             }
@@ -259,13 +274,17 @@ fun Application.module() {
                 get { call.respond(Repository.notes(call.companyId())) }
                 post {
                     val created = Repository.createNote(call.companyId(), call.userId(), call.receive())
+                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("note_upsert", note = created)))
                     call.respond(HttpStatusCode.Created, created)
                 }
                 put("/{id}") {
-                    call.respond(Repository.updateNote(call.companyId(), call.userId(), call.memberRole(), call.noteId(), call.receive()))
+                    val saved = Repository.upsertNote(call.companyId(), call.userId(), call.memberRole(), call.noteId(), call.receive())
+                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("note_upsert", note = saved)))
+                    call.respond(saved)
                 }
                 delete("/{id}") {
                     Repository.deleteNote(call.companyId(), call.userId(), call.memberRole(), call.noteId())
+                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("note_delete", deletedId = call.noteId())))
                     call.respond(HttpStatusCode.NoContent)
                 }
             }
@@ -311,6 +330,31 @@ fun Application.module() {
                         body.body,
                         body.parentId,
                         body.locationUrl,
+                        taskId = body.taskId,
+                        noteId = body.noteId,
+                    )
+                    ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
+                    call.respond(HttpStatusCode.Created, saved)
+                }
+                put("/{id}/messages/{messageId}") {
+                    val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
+                    val body = call.receive<MessageWrite>()
+                    val existing = Repository.message(call.companyId(), call.userId(), call.memberRole(), call.channelId(), messageId)
+                    if (existing != null) {
+                        call.respond(existing)
+                        return@put
+                    }
+                    val saved = Repository.addMessage(
+                        call.companyId(),
+                        call.userId(),
+                        call.memberRole(),
+                        call.channelId(),
+                        body.body,
+                        body.parentId,
+                        body.locationUrl,
+                        requireClientId(messageId),
+                        taskId = body.taskId,
+                        noteId = body.noteId,
                     )
                     ChatHub.publish(call.companyId(), json.encodeToString(WsEvent.serializer(), WsEvent("message", saved)))
                     call.respond(HttpStatusCode.Created, saved)
@@ -319,6 +363,7 @@ fun Application.module() {
                     val messageId = call.parameters["messageId"] ?: throw AppException(HttpStatusCode.BadRequest, "Thiếu tin nhắn")
                     try {
                         val created = Repository.messageToTask(call.companyId(), call.userId(), call.memberRole(), call.channelId(), messageId)
+                        Repository.publishTask(call.companyId(), created)
                         call.respond(HttpStatusCode.Created, created)
                     } catch (error: AppException) {
                         throw error
@@ -395,6 +440,13 @@ private fun ApplicationCall.channelId(): String = parameters["id"] ?: throw AppE
 
 class AppException(val status: HttpStatusCode, message: String) : RuntimeException(message)
 
+private val clientIdPattern = Regex("^[A-Za-z0-9-]{8,$ID_LEN}$")
+
+private fun requireClientId(raw: String): String {
+    if (!clientIdPattern.matches(raw)) throw AppException(HttpStatusCode.BadRequest, "Mã không hợp lệ")
+    return raw
+}
+
 private class Connection(
     val companyId: String,
     val userId: String,
@@ -420,6 +472,9 @@ private object ChatHub {
             connection.outgoing.trySend(Frame.Text(payload))
         }
     }
+
+    fun userIds(companyId: String): Set<String> =
+        rooms[companyId]?.map { it.userId }?.toSet().orEmpty()
 
     fun publishTo(companyId: String, userId: String, payload: String) {
         rooms[companyId]?.filter { it.userId == userId }?.forEach { connection ->
@@ -732,10 +787,17 @@ private object Repository {
             .filter { it.listId == null || it.listId in visible }
         val counts = rows.groupingBy { it.parentId }.eachCount()
         val grouped = TaskAssignees.selectAll().groupBy({ it[TaskAssignees.taskId] }, { it[TaskAssignees.userId] })
+        val commentTotal = TaskComments.id.count()
+        val comments = TaskComments.join(Tasks, JoinType.INNER, TaskComments.taskId, Tasks.id)
+            .select(TaskComments.taskId, commentTotal)
+            .where { (Tasks.companyId eq companyId) and alive(TaskComments.deletedAt) }
+            .groupBy(TaskComments.taskId)
+            .associate { it[TaskComments.taskId] to it[commentTotal].toInt() }
         rows.map { task ->
             val ids = grouped[task.id].orEmpty().ifEmpty { listOfNotNull(task.assigneeId) }
             task.copy(
                 subtaskCount = counts[task.id] ?: 0,
+                commentCount = comments[task.id] ?: 0,
                 assigneeIds = ids,
                 assigneeNames = ids.mapNotNull { names[it] },
                 assigneeId = ids.firstOrNull(),
@@ -744,24 +806,74 @@ private object Repository {
         }
     }
 
-    fun createTask(companyId: String, userId: String, role: String, request: TaskWrite): TaskDto {
+    fun createTask(companyId: String, userId: String, role: String, request: TaskWrite, clientId: String? = null): TaskDto {
         val (created, notices) = db {
             val parentKey = request.parentId?.trim()?.ifBlank { null }
             if (parentKey != null) {
                 ensureCanEditTask(requireTask(companyId, userId, role, parentKey), userId)
             }
             val listId = resolveListId(companyId, userId, role, request.listId, request.parentId)
-            val created = insertTask(companyId, userId, listId, request)
+            val created = insertTask(companyId, userId, listId, request, clientId)
             created to queueAssignmentNotices(companyId, userId, created.title, created.assigneeIds)
         }
         deliverNotices(companyId, notices)
         return created
     }
 
+    /** Idempotent PUT: creates the task with the client-generated id if it does not exist yet. */
+    fun upsertTask(companyId: String, userId: String, role: String, taskId: String, request: TaskWrite): TaskDto {
+        val row = db { Tasks.select { Tasks.id eq taskId }.singleOrNull() }
+        return when {
+            row == null -> createTask(companyId, userId, role, request, requireClientId(taskId))
+            row[Tasks.companyId] != companyId -> throw AppException(HttpStatusCode.NotFound, "Không tìm thấy công việc")
+            row[Tasks.deletedAt] != null -> throw AppException(HttpStatusCode.Gone, "Công việc đã bị xoá")
+            else -> updateTask(companyId, userId, role, taskId, request)
+        }
+    }
+
+    /**
+     * Push a task change only to connected members who can see its list.
+     * Same rule as [visibleSpaces], resolved once per event instead of once per connection.
+     */
+    fun publishTask(companyId: String, task: TaskDto) {
+        val online = ChatHub.userIds(companyId)
+        if (online.isEmpty()) return
+        val payload = json.encodeToString(WsEvent.serializer(), WsEvent("task_upsert", task = task))
+        val listId = task.listId
+        val audience: Set<String> = if (listId == null) online else db {
+            val spaceId = WorkLists.select {
+                (WorkLists.id eq listId) and usable(WorkLists.isActive, WorkLists.deletedAt)
+            }.singleOrNull()?.get(WorkLists.spaceId)
+            val space = spaceId?.let { id ->
+                Spaces.select { (Spaces.id eq id) and usable(Spaces.isActive, Spaces.deletedAt) }.singleOrNull()
+            }
+            when {
+                space == null -> emptySet()
+                !space[Spaces.isPrivate] -> online
+                else -> {
+                    val members = SpaceMembers.select { SpaceMembers.spaceId eq space[Spaces.id] }
+                        .map { it[SpaceMembers.userId] }
+                    val admins = Memberships.select {
+                        (Memberships.workspaceId eq companyId) and
+                            (Memberships.role eq "ADMIN") and
+                            usable(Memberships.isActive, Memberships.deletedAt)
+                    }.map { it[Memberships.userId] }
+                    online intersect (members + admins).toSet()
+                }
+            }
+        }
+        audience.forEach { ChatHub.publishTo(companyId, it, payload) }
+    }
+
     fun updateTask(companyId: String, userId: String, role: String, taskId: String, request: TaskWrite): TaskDto {
         val result = db {
             val existing = requireTask(companyId, userId, role, taskId)
             ensureCanEditTask(existing, userId)
+            val clientTime = request.updatedAt
+            if (clientTime != null && clientTime < existing[Tasks.updatedAt]) {
+                val names = memberNames(companyId)
+                return@db Triple(withDetails(existing.toTask(names, listNames(companyId)), names), null, emptyList())
+            }
             val beforeAssignees = TaskAssignees.select { TaskAssignees.taskId eq existing[Tasks.id] }
                 .map { it[TaskAssignees.userId] }
                 .ifEmpty { listOfNotNull(existing[Tasks.assigneeId]) }
@@ -792,7 +904,7 @@ private object Repository {
                 (done?.second ?: emptyList())
             val names = memberNames(companyId)
             Triple(
-                withPeople(Tasks.select { Tasks.id eq taskId }.single().toTask(names, listNames(companyId)), names),
+                withDetails(Tasks.select { Tasks.id eq taskId }.single().toTask(names, listNames(companyId)), names),
                 done?.first,
                 notices,
             )
@@ -909,9 +1021,9 @@ private object Repository {
             .map { it.toNote(names) }
     }
 
-    fun createNote(companyId: String, userId: String, request: NoteWrite): NoteDto = db {
+    fun createNote(companyId: String, userId: String, request: NoteWrite, clientId: String? = null): NoteDto = db {
         val now = System.currentTimeMillis()
-        val id = nextId()
+        val id = clientId ?: nextId()
         Notes.insert {
             it[Notes.id] = id
             it[Notes.companyId] = companyId
@@ -928,12 +1040,27 @@ private object Repository {
         Notes.select { Notes.id eq id }.single().toNote(memberNames(companyId))
     }
 
+    /** Idempotent PUT: creates the note with the client-generated id if it does not exist yet. */
+    fun upsertNote(companyId: String, userId: String, role: String, noteId: String, request: NoteWrite): NoteDto {
+        val row = db { Notes.select { Notes.id eq noteId }.singleOrNull() }
+        return when {
+            row == null -> createNote(companyId, userId, request, requireClientId(noteId))
+            row[Notes.companyId] != companyId -> throw AppException(HttpStatusCode.NotFound, "Không tìm thấy ghi chú")
+            row[Notes.deletedAt] != null -> throw AppException(HttpStatusCode.Gone, "Ghi chú đã bị xoá")
+            else -> updateNote(companyId, userId, role, noteId, request)
+        }
+    }
+
     fun updateNote(companyId: String, userId: String, role: String, noteId: String, request: NoteWrite): NoteDto = db {
         val existing = Notes.select {
             (Notes.id eq noteId) and (Notes.companyId eq companyId) and usable(Notes.isActive, Notes.deletedAt)
         }.singleOrNull()
             ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy ghi chú")
         ensureCanChange(role, existing[Notes.authorId], userId)
+        val clientTime = request.updatedAt
+        if (clientTime != null && clientTime < existing[Notes.updatedAt]) {
+            return@db existing.toNote(memberNames(companyId))
+        }
         Notes.update({ Notes.id eq existing[Notes.id] }) {
             it[title] = request.cleanTitle()
             it[body] = request.cleanBody()
@@ -1056,6 +1183,27 @@ private object Repository {
         messageRows(channelId, parentId?.trim()?.ifBlank { null })
     }
 
+    /** Message already stored under [messageId] in this channel (retried client upload), or null. */
+    fun message(companyId: String, userId: String, role: String, channelId: String, messageId: String): MessageDto? = db {
+        requireVisibleChannel(companyId, userId, role, channelId)
+        val row = Messages.select { Messages.id eq messageId }.singleOrNull() ?: return@db null
+        if (row[Messages.channelId] != channelId) throw AppException(HttpStatusCode.Conflict, "Mã tin nhắn đã được dùng")
+        if (row[Messages.deletedAt] != null) throw AppException(HttpStatusCode.Gone, "Tin nhắn đã bị xoá")
+        MessageDto(
+            id = messageId,
+            channelId = channelId,
+            senderId = row[Messages.senderId],
+            senderName = Users.select { Users.id eq row[Messages.senderId] }.singleOrNull()?.get(Users.name) ?: "Ẩn",
+            body = row[Messages.body],
+            createdAt = row[Messages.createdAt],
+            parentId = row[Messages.parentId],
+            replyCount = Messages.select { Messages.parentId eq messageId }.count().toInt(),
+            locationUrl = row[Messages.locationUrl],
+            taskId = row[Messages.taskId],
+            noteId = row[Messages.noteId],
+        )
+    }
+
     fun addMessage(
         companyId: String,
         userId: String,
@@ -1064,11 +1212,15 @@ private object Repository {
         rawBody: String,
         parentId: String?,
         rawLocationUrl: String? = null,
+        clientId: String? = null,
+        taskId: String? = null,
+        noteId: String? = null,
     ): MessageDto {
         val (saved, notices) = db {
             val channel = requireVisibleChannel(companyId, userId, role, channelId)
             val body = rawBody.trim()
             val location = cleanLocationUrl(rawLocationUrl)
+            val (sharedTask, sharedNote) = cleanSharedRef(companyId, userId, role, taskId, noteId)
             if (body.isEmpty() && location == null) {
                 throw AppException(HttpStatusCode.BadRequest, "Tin nhắn trống")
             }
@@ -1081,7 +1233,7 @@ private object Repository {
                     throw AppException(HttpStatusCode.BadRequest, "Chỉ trả lời vào tin nhắn gốc của kênh")
                 }
             }
-            val id = nextId()
+            val id = clientId ?: nextId()
             val now = System.currentTimeMillis()
             Messages.insert {
                 it[Messages.id] = id
@@ -1090,16 +1242,34 @@ private object Repository {
                 it[senderId] = userId
                 it[Messages.body] = body
                 it[locationUrl] = location
+                it[Messages.taskId] = sharedTask
+                it[Messages.noteId] = sharedNote
                 it[createdAt] = now
                 it[updatedAt] = now
             }
             val senderName = Users.select { Users.id eq userId }.singleOrNull()?.get(Users.name) ?: "Ẩn"
             val preview = body.ifBlank { location.orEmpty() }
-            val saved = MessageDto(id, channelId, userId, senderName, body, now, threadId, 0, location)
+            val saved = MessageDto(id, channelId, userId, senderName, body, now, threadId, 0, location, sharedTask, sharedNote)
             saved to queueChatNotices(companyId, userId, channel, preview)
         }
         deliverNotices(companyId, notices)
         return saved
+    }
+
+    /** A message may share one task or note the sender can see. */
+    private fun cleanSharedRef(companyId: String, userId: String, role: String, taskId: String?, noteId: String?): Pair<String?, String?> {
+        val task = taskId?.trim()?.ifBlank { null }
+        val note = noteId?.trim()?.ifBlank { null }
+        if (task != null && note != null) {
+            throw AppException(HttpStatusCode.BadRequest, "Chỉ chia sẻ một công việc hoặc một ghi chú")
+        }
+        if (task != null) requireTask(companyId, userId, role, task)
+        if (note != null) {
+            Notes.select {
+                (Notes.id eq note) and (Notes.companyId eq companyId) and usable(Notes.isActive, Notes.deletedAt)
+            }.singleOrNull() ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy ghi chú")
+        }
+        return task to note
     }
 
     fun messageToTask(companyId: String, userId: String, role: String, channelId: String, messageId: String): TaskDto = db {
@@ -1319,7 +1489,7 @@ private object Repository {
         return list[WorkLists.id]
     }
 
-    private fun insertTask(companyId: String, userId: String, listId: String, request: TaskWrite): TaskDto {
+    private fun insertTask(companyId: String, userId: String, listId: String, request: TaskWrite, clientId: String? = null): TaskDto {
         request.cleanDates()
         val parentId = request.parentId?.trim()?.ifBlank { null }
         val children = request.childIds.map { it.trim() }.filter { it.isNotEmpty() }
@@ -1335,7 +1505,7 @@ private object Repository {
         }
         val people = request.cleanAssignees(companyId)
         val now = System.currentTimeMillis()
-        val id = nextId()
+        val id = clientId ?: nextId()
         Tasks.insert {
             it[Tasks.id] = id
             it[Tasks.companyId] = companyId
@@ -1360,7 +1530,7 @@ private object Repository {
             applyLinks(companyId, id, null, children)
         }
         val names = memberNames(companyId)
-        return withPeople(Tasks.select { Tasks.id eq id }.single().toTask(names, listNames(companyId)), names)
+        return withDetails(Tasks.select { Tasks.id eq id }.single().toTask(names, listNames(companyId)), names)
     }
 
     private fun replaceAssignees(ownerId: String, userIds: List<String>) {
@@ -1375,7 +1545,7 @@ private object Repository {
         }
     }
 
-    private fun withPeople(task: TaskDto, names: Map<String, String>): TaskDto {
+    private fun withDetails(task: TaskDto, names: Map<String, String>): TaskDto {
         val ids = TaskAssignees.select { TaskAssignees.taskId eq task.id }.map { it[TaskAssignees.userId] }
             .ifEmpty { listOfNotNull(task.assigneeId) }
         return task.copy(
@@ -1383,7 +1553,15 @@ private object Repository {
             assigneeNames = ids.mapNotNull { names[it] },
             assigneeId = ids.firstOrNull(),
             assigneeName = ids.firstOrNull()?.let { names[it] },
+            commentCount = TaskComments.select {
+                (TaskComments.taskId eq task.id) and alive(TaskComments.deletedAt)
+            }.count().toInt(),
         )
+    }
+
+    fun task(companyId: String, taskId: String): TaskDto = db {
+        val names = memberNames(companyId)
+        withDetails(Tasks.select { Tasks.id eq taskId }.single().toTask(names, listNames(companyId)), names)
     }
 
     private fun applyLinks(companyId: String, taskId: String, parentId: String?, childIds: List<String>) {

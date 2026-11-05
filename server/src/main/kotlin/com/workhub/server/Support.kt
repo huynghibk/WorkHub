@@ -221,6 +221,8 @@ fun messageRows(channelId: String, parentId: String? = null): List<MessageDto> {
                 parentId = row[Messages.parentId],
                 replyCount = replies,
                 locationUrl = row[Messages.locationUrl],
+                taskId = row[Messages.taskId],
+                noteId = row[Messages.noteId],
             )
         }
         .reversed()

@@ -96,7 +96,7 @@ fun WorkspaceHomeScreen() {
     val context = LocalContext.current
     val session by graph.session.state.collectAsState(initial = null)
     val vm: WorkspaceHomeViewModel = viewModel(factory = workspaceHomeFactory(graph))
-    val scope = rememberCoroutineScope()
+    val logout = rememberGuardedLogout()
     val userName = session?.user?.name.orEmpty().ifBlank { "WorkHub" }
     var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
@@ -162,7 +162,7 @@ fun WorkspaceHomeScreen() {
                             step = HomeStep.Picker
                         }
                     },
-                    onLogout = { scope.launch { graph.session.clear() } },
+                    onLogout = logout,
                     showBack = hasWorkspace,
                     onBack = {
                         preferJoin = false
@@ -185,7 +185,7 @@ fun WorkspaceHomeScreen() {
                         preferJoin = true
                         step = HomeStep.Create
                     },
-                    onLogout = { scope.launch { graph.session.clear() } },
+                    onLogout = logout,
                 )
             }
         }

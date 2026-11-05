@@ -47,7 +47,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -58,16 +57,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.workhub.app.R
+import com.workhub.app.data.AppGraph
 import com.workhub.app.data.LocalAppGraph
+import com.workhub.app.data.OfflineStore
 import com.workhub.app.data.WorkHubApi
 import com.workhub.app.data.userMessage
 import com.workhub.shared.SearchHit
 import com.workhub.shared.TaskDto
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 private val Border = Color(0xFFE5E7EB)
@@ -87,15 +92,15 @@ fun HomeScreen(
 ) {
     val graph = LocalAppGraph.current
     val session by graph.session.state.collectAsState(initial = null)
-    val vm: HomeViewModel = viewModel(factory = homeFactory(graph.api))
+    val vm: HomeViewModel = viewModel(factory = homeFactory(graph))
+    val tasks by vm.tasks.collectAsStateWithLifecycle()
     val me = session?.user?.id
-    val open = vm.tasks.filter { it.parentId == null && it.status != "DONE" && it.status != "CANCELLED" }
+    val open = tasks.filter { it.parentId == null && it.status != "DONE" && it.status != "CANCELLED" }
     val today = open.count { isToday(it.dueAt) || isToday(it.startAt) }
     val assigned = open.count { me != null && (it.assigneeId == me || me in it.assigneeIds) }
     var query by remember { mutableStateOf("") }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
-    val context = LocalContext.current
 
     LaunchedEffect(query) {
         vm.search(query)
@@ -190,41 +195,6 @@ fun HomeScreen(
                     }
                     item {
                         ToolChip(
-                            label = stringResource(R.string.app_maps),
-                            iconRes = R.drawable.ic_brand_maps,
-                            onClick = onOpenMaps,
-                        )
-                    }
-                    item {
-                        ToolChip(
-                            label = stringResource(R.string.app_search),
-                            iconRes = R.drawable.ic_brand_google,
-                            onClick = { onOpenSearch("") },
-                        )
-                    }
-                    item {
-                        ToolChip(
-                            label = stringResource(R.string.app_zalo),
-                            iconRes = R.drawable.ic_brand_zalo,
-                            onClick = { openZalo(context) },
-                        )
-                    }
-                    item {
-                        ToolChip(
-                            label = stringResource(R.string.app_messenger),
-                            iconRes = R.drawable.ic_brand_messenger,
-                            onClick = { openMessenger(context) },
-                        )
-                    }
-                    item {
-                        ToolChip(
-                            label = stringResource(R.string.app_wechat),
-                            iconRes = R.drawable.ic_brand_wechat,
-                            onClick = { openWeChat(context) },
-                        )
-                    }
-                    item {
-                        ToolChip(
                             label = stringResource(R.string.tab_notes),
                             icon = Icons.Outlined.EditNote,
                             tint = Color(0xFFF59E0B),
@@ -257,10 +227,10 @@ fun HomeScreen(
                     color = Color(0xFF111827),
                 )
             }
-            if (vm.tasks.isEmpty()) {
+            if (tasks.isEmpty()) {
                 item { Text(stringResource(R.string.home_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                items(vm.tasks.filter { it.parentId == null }.take(8), key = { it.id }) { task ->
+                items(tasks.filter { it.parentId == null }.take(8), key = { it.id }) { task ->
                     RecentRow(task, onOpenTasks)
                 }
             }
@@ -298,7 +268,7 @@ private fun ToolChip(
             .border(1.dp, Border, RoundedCornerShape(14.dp))
             .background(Color.White)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -320,7 +290,13 @@ private fun ToolChip(
                 icon != null -> Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
             }
         }
-        Text(label, style = MaterialTheme.typography.labelLarge, color = Color(0xFF374151))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = Color(0xFF374151),
+            lineHeight = 18.sp,
+            maxLines = 1,
+        )
     }
 }
 
@@ -414,9 +390,9 @@ private fun RecentRow(title: String, subtitle: String, onClick: () -> Unit) {
     }
 }
 
-class HomeViewModel(private val api: WorkHubApi) : ViewModel() {
-    var tasks by mutableStateOf<List<TaskDto>>(emptyList())
-        private set
+class HomeViewModel(private val api: WorkHubApi, private val offline: OfflineStore) : ViewModel() {
+    val tasks: StateFlow<List<TaskDto>> =
+        offline.tasks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     var hits by mutableStateOf<List<SearchHit>>(emptyList())
         private set
     var searching by mutableStateOf(false)
@@ -432,7 +408,7 @@ class HomeViewModel(private val api: WorkHubApi) : ViewModel() {
     fun refresh() {
         viewModelScope.launch {
             try {
-                tasks = api.tasks().sortedByDescending { it.updatedAt }
+                offline.sync()
                 error = null
             } catch (e: Exception) {
                 error = e.userMessage()
@@ -463,9 +439,9 @@ class HomeViewModel(private val api: WorkHubApi) : ViewModel() {
     }
 }
 
-private fun homeFactory(api: WorkHubApi) = object : ViewModelProvider.Factory {
+private fun homeFactory(graph: AppGraph) = object : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         @Suppress("UNCHECKED_CAST")
-        return HomeViewModel(api) as T
+        return HomeViewModel(graph.api, graph.offline) as T
     }
 }

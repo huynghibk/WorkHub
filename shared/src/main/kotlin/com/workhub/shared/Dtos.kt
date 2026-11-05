@@ -146,6 +146,8 @@ data class TaskWrite(
     val childIds: List<String> = emptyList(),
     val updateLinks: Boolean = false,
     val locationUrl: String? = null,
+    /** Client edit time; server ignores the write if its copy is newer (last-write-wins). */
+    val updatedAt: Long? = null,
 )
 
 @Serializable
@@ -169,6 +171,7 @@ data class TaskDto(
     val assigneeNames: List<String> = emptyList(),
     val startAt: Long? = null,
     val locationUrl: String? = null,
+    val commentCount: Int = 0,
 )
 
 @Serializable
@@ -202,6 +205,8 @@ data class NoteWrite(
     val body: String = "",
     val dueAt: Long? = null,
     val locationUrl: String? = null,
+    /** Client edit time; server ignores the write if its copy is newer (last-write-wins). */
+    val updatedAt: Long? = null,
 )
 
 @Serializable
@@ -263,6 +268,12 @@ data class MessageDto(
     val parentId: String? = null,
     val replyCount: Int = 0,
     val locationUrl: String? = null,
+    /**
+     * Shared task or note. Clients draw the card from their own task/note data, so members who
+     * cannot see the item only get [body] (its title at share time).
+     */
+    val taskId: String? = null,
+    val noteId: String? = null,
 )
 
 @Serializable
@@ -270,6 +281,8 @@ data class MessageWrite(
     val body: String,
     val parentId: String? = null,
     val locationUrl: String? = null,
+    val taskId: String? = null,
+    val noteId: String? = null,
 )
 
 @Serializable
@@ -278,6 +291,12 @@ data class WsEvent(
     val message: MessageDto? = null,
     val error: String? = null,
     val notification: NotificationDto? = null,
+    /** type = task_upsert */
+    val task: TaskDto? = null,
+    /** type = note_upsert */
+    val note: NoteDto? = null,
+    /** type = task_delete / note_delete */
+    val deletedId: String? = null,
 )
 
 @Serializable

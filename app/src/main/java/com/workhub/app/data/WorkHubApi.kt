@@ -50,6 +50,7 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -64,10 +65,21 @@ import kotlinx.coroutines.delay
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-class ApiException(message: String) : Exception(message)
+class ApiException(message: String, val status: Int? = null) : Exception(message)
 
 class WorkHubApi(private val session: SessionStore) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** Server clock minus device clock, refreshed from every response. */
+    @Volatile
+    private var clockOffset = 0L
+
+    /** Device time corrected to the server clock (falls back to the device clock until first contact). */
+    fun serverNow(): Long = System.currentTimeMillis() + clockOffset
+
+    private fun trackClock(response: HttpResponse) {
+        response.headers["X-Server-Time"]?.toLongOrNull()?.let { clockOffset = it - System.currentTimeMillis() }
+    }
     private val http = HttpClient(OkHttp) {
         engine {
             config {
@@ -97,6 +109,7 @@ class WorkHubApi(private val session: SessionStore) {
             val response = http.request(current.baseUrl.trimEnd('/') + "/health") {
                 method = HttpMethod.Get
             }
+            trackClock(response)
             if (!response.status.isSuccess()) {
                 throw ApiException("Máy chủ chưa sẵn sàng (${response.status.value})")
             }
@@ -233,14 +246,15 @@ class WorkHubApi(private val session: SessionStore) {
         send<Unit>(HttpMethod.Put, "/members/$userId/role", RoleUpdate(role))
     }
 
-    suspend fun tasks(): List<TaskDto> = send(HttpMethod.Get, "/tasks")
+    suspend fun tasks(workspaceId: String? = null): List<TaskDto> =
+        send(HttpMethod.Get, "/tasks", workspaceId = workspaceId)
 
-    suspend fun createTask(write: TaskWrite): TaskDto = send(HttpMethod.Post, "/tasks", write)
+    /** Idempotent create-or-update with a client-generated id. */
+    suspend fun putTask(id: String, write: TaskWrite, workspaceId: String): TaskDto =
+        send(HttpMethod.Put, "/tasks/$id", write, workspaceId = workspaceId)
 
-    suspend fun updateTask(id: String, write: TaskWrite): TaskDto = send(HttpMethod.Put, "/tasks/$id", write)
-
-    suspend fun deleteTask(id: String) {
-        send<Unit>(HttpMethod.Delete, "/tasks/$id")
+    suspend fun deleteTask(id: String, workspaceId: String) {
+        send<Unit>(HttpMethod.Delete, "/tasks/$id", workspaceId = workspaceId)
     }
 
     suspend fun comments(taskId: String): List<CommentDto> = send(HttpMethod.Get, "/tasks/$taskId/comments")
@@ -248,14 +262,15 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun addComment(taskId: String, body: String): CommentDto =
         send(HttpMethod.Post, "/tasks/$taskId/comments", CommentWrite(body))
 
-    suspend fun notes(): List<NoteDto> = send(HttpMethod.Get, "/notes")
+    suspend fun notes(workspaceId: String? = null): List<NoteDto> =
+        send(HttpMethod.Get, "/notes", workspaceId = workspaceId)
 
-    suspend fun createNote(write: NoteWrite): NoteDto = send(HttpMethod.Post, "/notes", write)
+    /** Idempotent create-or-update with a client-generated id. */
+    suspend fun putNote(id: String, write: NoteWrite, workspaceId: String): NoteDto =
+        send(HttpMethod.Put, "/notes/$id", write, workspaceId = workspaceId)
 
-    suspend fun updateNote(id: String, write: NoteWrite): NoteDto = send(HttpMethod.Put, "/notes/$id", write)
-
-    suspend fun deleteNote(id: String) {
-        send<Unit>(HttpMethod.Delete, "/notes/$id")
+    suspend fun deleteNote(id: String, workspaceId: String) {
+        send<Unit>(HttpMethod.Delete, "/notes/$id", workspaceId = workspaceId)
     }
 
     suspend fun channels(): List<ChannelDto> = send(HttpMethod.Get, "/channels")
@@ -288,13 +303,9 @@ class WorkHubApi(private val session: SessionStore) {
         return send(HttpMethod.Get, path)
     }
 
-    suspend fun sendMessage(
-        channelId: String,
-        body: String,
-        parentId: String? = null,
-        locationUrl: String? = null,
-    ): MessageDto =
-        send(HttpMethod.Post, "/channels/$channelId/messages", MessageWrite(body, parentId, locationUrl))
+    /** Idempotent send with a client-generated id (used by the offline queue). */
+    suspend fun putMessage(channelId: String, id: String, write: MessageWrite, workspaceId: String): MessageDto =
+        send(HttpMethod.Put, "/channels/$channelId/messages/$id", write, workspaceId = workspaceId)
 
     suspend fun messageToTask(channelId: String, messageId: String): TaskDto =
         send(HttpMethod.Post, "/channels/$channelId/messages/$messageId/task")
@@ -321,6 +332,7 @@ class WorkHubApi(private val session: SessionStore) {
         path: String,
         body: Any? = null,
         auth: Boolean = true,
+        workspaceId: String? = null,
     ): T {
         try {
             val current = session.current()
@@ -329,31 +341,37 @@ class WorkHubApi(private val session: SessionStore) {
                 if (auth) {
                     val token = current.token ?: throw ApiException("Bạn cần đăng nhập lại")
                     header(HttpHeaders.Authorization, "Bearer $token")
-                    current.workspace?.id?.let { header("X-Workspace-Id", it) }
+                    (workspaceId ?: current.workspace?.id)?.let { header("X-Workspace-Id", it) }
                 }
                 if (body != null) {
                     contentType(ContentType.Application.Json)
                     setBody(body)
                 }
             }
+            trackClock(response)
             if (!response.status.isSuccess()) {
+                if (auth && response.status.value == 401) {
+                    session.expire()
+                    throw ApiException("Phiên đăng nhập đã hết hạn, hãy đăng nhập lại", 401)
+                }
                 if (response.status.value == 405 && path.contains("/me")) {
                     throw ApiException("Máy chủ chưa cập nhật API hồ sơ (405). Hãy restart server backend rồi thử lại.")
                 }
                 if (response.status.value == 404) {
                     throw ApiException(
                         "Không tìm thấy API (${path}). Kiểm tra địa chỉ máy chủ và Render còn Live; mở /health trên trình duyệt phải ra ok.",
+                        404,
                     )
                 }
                 val message = runCatching { response.body<ErrorResponse>().error }.getOrNull()
                     ?: "Yêu cầu thất bại (${response.status.value})"
                 // Stale workspace after Render DB wipe / redeploy — drop local selection.
-                if (response.status.value == 403 &&
+                if (response.status.value == 403 && workspaceId == null &&
                     message.contains("không thuộc workspace", ignoreCase = true)
                 ) {
                     session.clearWorkspace()
                 }
-                throw ApiException(message)
+                throw ApiException(message, response.status.value)
             }
             if (T::class == Unit::class) {
                 @Suppress("UNCHECKED_CAST")
@@ -371,11 +389,13 @@ class WorkHubApi(private val session: SessionStore) {
 }
 
 private fun connectErrorMessage(error: Exception): String {
-    val detail = error.message?.lineSequence()?.firstOrNull()?.take(120).orEmpty()
+    val detail = error.message?.lineSequence()?.firstOrNull()?.take(80).orEmpty()
+    val hint =
+        "Thử mở URL server trong Chrome trên emulator. Máy công ty/proxy có thể chặn emulator dù điện thoại vẫn vào được."
     return if (detail.isBlank()) {
-        "Không kết nối được máy chủ. Mở /health trên trình duyệt, chờ chữ ok (Render có thể đang ngủ ~1 phút) rồi thử lại."
+        "Không kết nối được máy chủ. $hint"
     } else {
-        "Không kết nối được máy chủ ($detail). Nếu Render vừa ngủ, mở /health chờ ok rồi thử lại."
+        "Không kết nối được máy chủ ($detail). $hint"
     }
 }
 

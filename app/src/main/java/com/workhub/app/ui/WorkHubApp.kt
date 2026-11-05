@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,9 +24,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PersonAdd
@@ -37,14 +41,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,11 +60,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -75,45 +82,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.workhub.app.R
 import com.workhub.app.data.LocalAppGraph
-import kotlinx.coroutines.launch
-
-private val Ink = Color(0xFF111827)
-private val Indigo = Color(0xFF4F46E5)
-private val IndigoSoft = Color(0xFFEEF2FF)
-private val Cyan = Color(0xFF06B6D4)
-private val Muted = Color(0xFF9CA3AF)
-private val Line = Color(0xFFE5E7EB)
-
-@Composable
-fun WorkHubTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = Indigo,
-            onPrimary = Color.White,
-            primaryContainer = IndigoSoft,
-            onPrimaryContainer = Color(0xFF312E81),
-            secondary = Cyan,
-            onSecondary = Color.White,
-            secondaryContainer = Color(0xFFECFEFF),
-            tertiary = Color(0xFF10B981),
-            tertiaryContainer = Color(0xFFECFDF5),
-            background = Color(0xFFF9FAFB),
-            onBackground = Ink,
-            surface = Color.White,
-            onSurface = Ink,
-            surfaceVariant = Color(0xFFF3F4F6),
-            outline = Line,
-        ),
-        shapes = Shapes(
-            extraSmall = RoundedCornerShape(10.dp),
-            small = RoundedCornerShape(12.dp),
-            medium = RoundedCornerShape(16.dp),
-            large = RoundedCornerShape(20.dp),
-            extraLarge = RoundedCornerShape(24.dp),
-        ),
-        content = content,
-    )
-}
 
 private data class Tab(
     val route: String,
@@ -135,7 +103,7 @@ internal fun WorkspaceBar(
     val session by graph.session.state.collectAsState(initial = null)
     val workspace = session?.workspace
     val user = session?.user
-    val scope = rememberCoroutineScope()
+    val logout = rememberGuardedLogout()
     var menu by remember { mutableStateOf(false) }
     val name = workspace?.name?.ifBlank { null } ?: stringResource(R.string.workspace)
     Surface(color = Color.Transparent, tonalElevation = 0.dp) {
@@ -151,8 +119,8 @@ internal fun WorkspaceBar(
                     .weight(1f)
                     .height(56.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color.White)
-                    .border(1.dp, Line, RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                     .clickable(onClick = onSwitchWorkspace)
                     .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -162,12 +130,12 @@ internal fun WorkspaceBar(
                     modifier = Modifier
                         .size(BarAvatar)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Indigo),
+                        .background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         name.take(1).uppercase(),
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onPrimary,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
@@ -200,15 +168,15 @@ internal fun WorkspaceBar(
                 modifier = Modifier
                     .size(BarAction)
                     .clip(CircleShape)
-                    .background(Color.White)
-                    .border(1.dp, Line, CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
                     .clickable(onClick = onInvite),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Filled.PersonAdd,
                     contentDescription = stringResource(R.string.add_workspace_member),
-                    tint = Indigo,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(24.dp),
                 )
             }
@@ -226,8 +194,8 @@ internal fun WorkspaceBar(
                         avatarDataUrl = user?.avatarDataUrl,
                         size = BarAction,
                         corner = BarAction / 2,
-                        background = IndigoSoft,
-                        contentColor = Indigo,
+                        background = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.primary,
                     )
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -242,7 +210,7 @@ internal fun WorkspaceBar(
                         text = { Text(stringResource(R.string.logout)) },
                         onClick = {
                             menu = false
-                            scope.launch { graph.session.clear() }
+                            logout()
                         },
                     )
                 }
@@ -373,8 +341,11 @@ private fun MainNav() {
     val immersive = route == "maps" || route == "search" || route == "calendar"
     val hideWorkspaceBar by graph.hideWorkspaceBar.collectAsState()
     val chatChromeVisible by graph.chatChromeVisible.collectAsState()
-    val hideChrome = hideWorkspaceBar || (route == "chat" && !chatChromeVisible)
+    // Keep bottom nav on chat/task detail so Home is always reachable without gestures.
+    val hideTopBar = hideWorkspaceBar || (route == "chat" && !chatChromeVisible)
+    val hideBottomBar = immersive
     var appsOpen by remember { mutableStateOf(false) }
+    var createOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var inviteOpen by remember { mutableStateOf(false) }
     var switcherOpen by remember { mutableStateOf(false) }
@@ -429,6 +400,7 @@ private fun MainNav() {
     }
     fun navigateBack() {
         when {
+            createOpen -> createOpen = false
             appsOpen -> appsOpen = false
             immersive -> {
                 if (!nav.popBackStack()) {
@@ -445,17 +417,17 @@ private fun MainNav() {
             route != "home" -> go("home")
         }
     }
-    BackHandler(enabled = appsOpen || immersive || route != "home") {
+    BackHandler(enabled = createOpen || appsOpen || immersive || route != "home") {
         navigateBack()
     }
     val edgeSwipe = rememberEdgeSwipeBack(
-        enabled = appsOpen || immersive || route != "home" || hideWorkspaceBar,
+        enabled = createOpen || appsOpen || immersive || route != "home" || hideWorkspaceBar,
     )
     val workspace = session?.workspace
     Scaffold(
         containerColor = Color(0xFFF9FAFB),
         topBar = {
-            if (!immersive && !hideChrome) {
+            if (!immersive && !hideTopBar) {
                 WorkspaceBar(
                     onOpenSettings = { settingsOpen = true },
                     onInvite = { inviteOpen = true },
@@ -464,13 +436,17 @@ private fun MainNav() {
             }
         },
         bottomBar = {
-            if (!immersive && !hideChrome) {
+            if (!hideBottomBar) {
                 SoftTabBar(
                     tabs = tabs,
                     selectedRoute = route,
                     appsHighlighted = appsOpen || route == "notes" || route == "org",
-                    onSelect = { tab -> go(tab.route) },
+                    onSelect = { tab ->
+                        appsOpen = false
+                        go(tab.route)
+                    },
                     onApps = { appsOpen = true },
+                    onCreate = { createOpen = true },
                 )
             }
         },
@@ -500,7 +476,10 @@ private fun MainNav() {
             composable("tasks") { TaskScreen() }
             composable("notes") { NoteScreen() }
             composable("chat") {
-                ChatScreen(onOpenMaps = { openTool("maps") })
+                ChatScreen(
+                    onOpenMaps = { openTool("maps") },
+                    onNavigateHome = { go("home") },
+                )
             }
             composable("org") { AdminOrgScreen() }
             composable("maps") {
@@ -574,6 +553,25 @@ private fun MainNav() {
             },
         )
     }
+    if (createOpen) {
+        QuickCreateSheet(
+            onDismiss = { createOpen = false },
+            onCreateTask = {
+                createOpen = false
+                graph.pendingQuickCreate.value = "task"
+                go("tasks")
+            },
+            onCreateNote = {
+                createOpen = false
+                graph.pendingQuickCreate.value = "note"
+                go("notes")
+            },
+            onOpenChat = {
+                createOpen = false
+                go("chat")
+            },
+        )
+    }
 }
 
 @Composable
@@ -583,125 +581,209 @@ private fun SoftTabBar(
     appsHighlighted: Boolean,
     onSelect: (Tab) -> Unit,
     onApps: () -> Unit,
+    onCreate: () -> Unit,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFFF9FAFB))
-            .windowInsetsPadding(WindowInsets.navigationBars),
+            .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
+        Surface(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(Line),
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(64.dp)
-                .padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly,
+                .weight(1f)
+                .height(58.dp)
+                .shadow(8.dp, RoundedCornerShape(29.dp)),
+            shape = RoundedCornerShape(29.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
         ) {
-            tabs.forEach { tab ->
-                SoftTabItem(
-                    tab = tab,
-                    selected = selectedRoute == tab.route && !appsHighlighted,
-                    onClick = { onSelect(tab) },
-                    modifier = Modifier.weight(1f),
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                tabs.forEach { tab ->
+                    SoftDockIcon(
+                        selected = selectedRoute == tab.route && !appsHighlighted,
+                        contentDescription = tab.label,
+                        icon = if (selectedRoute == tab.route && !appsHighlighted) {
+                            tab.selectedIcon
+                        } else {
+                            tab.icon
+                        },
+                        onClick = { onSelect(tab) },
+                    )
+                }
+                SoftDockIcon(
+                    selected = appsHighlighted,
+                    contentDescription = stringResource(R.string.tab_apps),
+                    icon = if (appsHighlighted) Icons.Filled.Apps else Icons.Outlined.Apps,
+                    onClick = onApps,
                 )
             }
-            SoftAppsTab(
-                selected = appsHighlighted,
-                onClick = onApps,
-                modifier = Modifier.weight(1f),
-            )
         }
-    }
-}
-
-@Composable
-private fun SoftAppsTab(
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val tint by animateColorAsState(
-        targetValue = if (selected) Indigo else Muted,
-        label = "appsTint",
-    )
-    Column(
-        modifier = modifier
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Box(
+        Surface(
             modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(if (selected) IndigoSoft else Color.Transparent),
-            contentAlignment = Alignment.Center,
+                .size(58.dp)
+                .shadow(8.dp, CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onCreate,
+                ),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
         ) {
-            Icon(
-                imageVector = if (selected) Icons.Filled.Apps else Icons.Outlined.Apps,
-                contentDescription = stringResource(R.string.tab_apps),
-                tint = tint,
-                modifier = Modifier.size(22.dp),
-            )
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = stringResource(R.string.quick_create),
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
         }
-        Text(
-            stringResource(R.string.tab_apps),
-            color = tint,
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 
 @Composable
-private fun SoftTabItem(
-    tab: Tab,
+private fun SoftDockIcon(
     selected: Boolean,
+    contentDescription: String,
+    icon: ImageVector,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val tint by animateColorAsState(
-        targetValue = if (selected) Indigo else Muted,
-        label = "tabTint",
+        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        label = "dockTint",
     )
-    Column(
-        modifier = modifier
+    Box(
+        modifier = Modifier
+            .size(TouchTarget)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) MaterialTheme.colorScheme.surface else Color.Transparent)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
-            )
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            ),
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = if (selected) tab.selectedIcon else tab.icon,
-            contentDescription = tab.label,
+            imageVector = icon,
+            contentDescription = contentDescription,
             tint = tint,
             modifier = Modifier.size(24.dp),
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuickCreateSheet(
+    onDismiss: () -> Unit,
+    onCreateTask: () -> Unit,
+    onCreateNote: () -> Unit,
+    onOpenChat: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.quick_create),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.close))
+                }
+            }
+            Text(
+                stringResource(R.string.quick_create_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            QuickCreateRow(
+                icon = Icons.Filled.CheckCircle,
+                tint = Color(0xFF3B82F6),
+                label = stringResource(R.string.quick_create_task),
+                onClick = onCreateTask,
+            )
+            QuickCreateRow(
+                icon = Icons.Filled.EditNote,
+                tint = Color(0xFFF59E0B),
+                label = stringResource(R.string.quick_create_note),
+                onClick = onCreateNote,
+            )
+            QuickCreateRow(
+                icon = Icons.Filled.Chat,
+                tint = Color(0xFF14B8A6),
+                label = stringResource(R.string.quick_create_chat),
+                onClick = onOpenChat,
+            )
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        }
+    }
+}
+
+@Composable
+private fun QuickCreateRow(
+    icon: ImageVector,
+    tint: Color,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(tint.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        }
         Text(
-            tab.label,
-            color = tint,
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            label,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            lineHeight = 22.sp,
         )
     }
 }
