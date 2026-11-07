@@ -88,5 +88,19 @@ Sau đó mọi redeploy **không** xoá user/workspace nữa (data nằm trên N
 - Chỉ dùng H2 + `/data` trên Render Free → data vẫn mất khi redeploy.
 - Persistent Disk của Render cần gói trả phí.
 
+### Gửi mã xác thực email
+
+Đăng ký gửi mã 6 số, hiệu lực **5 phút**. Trên Render → Environment:
+
+| Key | Ví dụ |
+|-----|--------|
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | địa chỉ Gmail gửi đi |
+| `SMTP_PASSWORD` | App Password (không phải mật khẩu đăng nhập) |
+| `MAIL_FROM` | cùng địa chỉ gửi, có thể bỏ trống |
+
+Chưa đặt các biến này thì server **không gửi mail**, chỉ in mã ra log để chạy local.
+
 - Đặt `WORKHUB_JWT_SECRET` khác giá trị mặc định trên môi trường production.
 - WebSocket chat cần host hỗ trợ WS (Render/Fly đều được).

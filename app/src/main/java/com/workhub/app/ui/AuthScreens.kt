@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,7 @@ import com.workhub.app.data.AppGraph
 import com.workhub.app.data.LocalAppGraph
 import com.workhub.app.data.userMessage
 import com.workhub.shared.RegisterRequest
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -154,27 +156,84 @@ private fun RegisterScreen(onBack: () -> Unit) {
     var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var verifiedEmail by remember { mutableStateOf("") }
+    var expiresAt by remember { mutableStateOf(0L) }
+    var tick by remember { mutableStateOf(0) }
     var serverUrl by remember { mutableStateOf(BuildConfig.DEFAULT_BASE_URL) }
     var serverDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         serverUrl = graph.session.current().baseUrl
     }
+    LaunchedEffect(expiresAt) {
+        if (expiresAt == 0L) return@LaunchedEffect
+        while (System.currentTimeMillis() < expiresAt) {
+            delay(1_000)
+            tick++
+        }
+        tick++
+    }
+    val emailMatches = email.trim().lowercase() == verifiedEmail && verifiedEmail.isNotEmpty()
+    val remainSec = if (emailMatches && tick >= 0) {
+        ((expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+    } else {
+        0L
+    }
+    val remainLabel = "%d:%02d".format(remainSec / 60, remainSec % 60)
     Box(Modifier.fillMaxSize()) {
         AuthColumn(title = stringResource(R.string.register_title), subtitle = stringResource(R.string.register_subtitle)) {
             SoftField(name, { name = it }, stringResource(R.string.display_name))
             SoftField(username, { username = it }, "Username")
-            SoftField(email, { email = it }, "Email")
+            SoftField(email, { email = it }, "Email", keyboard = KeyboardType.Email)
+            TextButton(
+                onClick = {
+                    val target = email.trim()
+                    vm.sendVerifyCode(target, serverUrl) { seconds ->
+                        verifiedEmail = target.lowercase()
+                        expiresAt = System.currentTimeMillis() + seconds * 1000L
+                        code = ""
+                    }
+                },
+                enabled = !vm.busy && email.contains("@"),
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text(
+                    if (emailMatches && remainSec > 0) stringResource(R.string.verify_resend)
+                    else stringResource(R.string.verify_send),
+                )
+            }
+            if (emailMatches && remainSec > 0) {
+                Text(stringResource(R.string.verify_sent), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    stringResource(R.string.verify_remaining, remainLabel),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else if (emailMatches && expiresAt > 0L) {
+                Text(stringResource(R.string.verify_expired), color = MaterialTheme.colorScheme.error)
+            }
+            SoftField(
+                code,
+                { code = it.filter { ch -> ch.isDigit() }.take(6) },
+                stringResource(R.string.verify_code),
+                keyboard = KeyboardType.Number,
+            )
             PasswordField(password, { password = it })
             vm.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             SoftPrimaryButton(
                 text = stringResource(R.string.sign_up),
                 onClick = {
                     vm.register(
-                        RegisterRequest(name = name, email = email, password = password, username = username),
+                        RegisterRequest(
+                            name = name,
+                            email = email,
+                            password = password,
+                            username = username,
+                            verifyCode = code,
+                        ),
                         serverUrl,
                     )
                 },
-                enabled = !vm.busy,
+                enabled = !vm.busy && code.length == 6,
             )
             if (vm.busy) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
@@ -387,6 +446,22 @@ class AuthViewModel(private val graph: AppGraph) : ViewModel() {
                 if (remember) graph.session.rememberLogin(login.trim()) else graph.session.forgetLogin()
                 dropOtherUsersData(response.user.id)
                 graph.session.save(response.token, response.user)
+            } catch (e: Exception) {
+                error = e.userMessage()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun sendVerifyCode(email: String, serverUrl: String, onSent: (Int) -> Unit) {
+        viewModelScope.launch {
+            busy = true
+            error = null
+            try {
+                graph.session.setBaseUrl(serverUrl)
+                val response = graph.api.sendVerifyCode(email.trim())
+                onSent(response.expiresInSeconds)
             } catch (e: Exception) {
                 error = e.userMessage()
             } finally {

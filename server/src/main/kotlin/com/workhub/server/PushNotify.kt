@@ -31,7 +31,8 @@ internal fun registerPushToken(userId: String, token: String, platform: String) 
 }
 
 internal fun tryPushNotification(userId: String, notice: NotificationDto) {
-    if (notice.channelId != null && isChannelMuted(userId, notice.channelId)) return
+    val mutedChannelId = notice.channelId
+    if (mutedChannelId != null && isChannelMuted(userId, mutedChannelId)) return
     val key = System.getenv("FCM_SERVER_KEY")?.trim()?.takeIf { it.isNotEmpty() } ?: return
     val tokens = db {
         PushTokens.select { PushTokens.userId eq userId }

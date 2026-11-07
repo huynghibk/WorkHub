@@ -37,6 +37,8 @@ import com.workhub.shared.NoteDto
 import com.workhub.shared.NoteWrite
 import com.workhub.shared.ProfileUpdate
 import com.workhub.shared.RegisterRequest
+import com.workhub.shared.SendVerifyRequest
+import com.workhub.shared.SendVerifyResponse
 import com.workhub.shared.TaskDto
 import com.workhub.shared.TaskWrite
 import com.workhub.shared.UploadResult
@@ -166,6 +168,13 @@ class WorkHubApi(private val session: SessionStore) {
         ensureAwake()
         return authWithRetry {
             send(HttpMethod.Post, "/auth/register", request, auth = false)
+        }
+    }
+
+    suspend fun sendVerifyCode(email: String): SendVerifyResponse {
+        ensureAwake()
+        return authWithRetry {
+            send(HttpMethod.Post, "/auth/verify-email", SendVerifyRequest(email), auth = false)
         }
     }
 

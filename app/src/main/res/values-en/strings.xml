@@ -292,7 +292,13 @@
     <string name="sign_in">Sign in</string>
     <string name="create_account">Create account</string>
     <string name="register_title">Create account</string>
-    <string name="register_subtitle">Username is for signing in. Display name is what people see in the workspace.</string>
+    <string name="register_subtitle">Username is for signing in. A 6-digit code is emailed to you and expires in 5 minutes.</string>
+    <string name="verify_send">Send code</string>
+    <string name="verify_resend">Resend code</string>
+    <string name="verify_code">Verification code</string>
+    <string name="verify_sent">A 6-digit code was sent to your email.</string>
+    <string name="verify_remaining">Code expires in %1$s</string>
+    <string name="verify_expired">The code has expired. Send a new one.</string>
     <string name="display_name">Display name</string>
     <string name="password">Password</string>
     <string name="hide_password">Hide password</string>

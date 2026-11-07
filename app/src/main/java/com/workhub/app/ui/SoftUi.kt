@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.workhub.app.R
@@ -145,6 +147,7 @@ internal fun SoftField(
     leading: @Composable (() -> Unit)? = null,
     singleLine: Boolean = true,
     showClearCopy: Boolean = true,
+    keyboard: KeyboardType = KeyboardType.Text,
 ) {
     OutlinedTextField(
         value = value,
@@ -152,6 +155,7 @@ internal fun SoftField(
         modifier = modifier.fillMaxWidth(),
         singleLine = singleLine,
         shape = SoftPill,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
         label = if (placeholder == null) ({ Text(label) }) else null,
         placeholder = placeholder?.let { { Text(it) } },
         leadingIcon = leading,

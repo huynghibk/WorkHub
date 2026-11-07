@@ -17,3 +17,14 @@ services:
       # Dashboard → Environment → dán connection string Neon vào DATABASE_URL.
       - key: DATABASE_URL
         sync: false
+      # Gửi mã xác thực đăng ký. Gmail: smtp.gmail.com / 587 / App Password.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false

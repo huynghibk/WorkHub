@@ -29,6 +29,7 @@ import com.workhub.shared.NoteDto
 import com.workhub.shared.NoteWrite
 import com.workhub.shared.ProfileUpdate
 import com.workhub.shared.RegisterRequest
+import com.workhub.shared.SendVerifyRequest
 import com.workhub.shared.TaskDto
 import com.workhub.shared.TaskWrite
 import com.workhub.shared.UserDto
@@ -171,6 +172,10 @@ fun Application.module() {
         staticFiles("/uploads", uploadDirectory())
         authenticate("auth-jwt") {
             post("/upload") { receiveUpload(call) }
+        }
+        post("/auth/verify-email") {
+            Repository.sendVerifyCode(call.receive<SendVerifyRequest>().email)
+            call.respond(Mailer.sentResponse())
         }
         post("/auth/register") {
             val response = Repository.register(call.receive())
@@ -634,13 +639,24 @@ private fun broadcastPresence(companyId: String, userId: String, online: Boolean
 private val ALLOWED_REACTIONS = setOf("❤️", "👍", "😂", "😮", "😢", "😠")
 
 private object Repository {
+    fun sendVerifyCode(email: String) {
+        val emailAddress = email.normalizedEmail()
+        db {
+            if (Users.select { Users.email eq emailAddress }.any()) {
+                throw AppException(HttpStatusCode.Conflict, "Email đã được dùng")
+            }
+        }
+        Mailer.send(emailAddress)
+    }
+
     fun register(request: RegisterRequest): AuthResponse {
         val displayName = request.name.trimmed("Tên", 80)
         val handle = request.username.normalizedUsername()
         val emailAddress = request.email.normalizedEmail()
         val password = request.password.requirePassword()
+        Mailer.requireValid(emailAddress, request.verifyCode)
         val hash = org.mindrot.jbcrypt.BCrypt.hashpw(password, org.mindrot.jbcrypt.BCrypt.gensalt())
-        return db {
+        val response = db {
             if (Users.select { Users.username eq handle }.any()) {
                 throw AppException(HttpStatusCode.Conflict, "Username đã được dùng")
             }
@@ -662,6 +678,8 @@ private object Repository {
             }
             AuthResponse(JwtTokens.issue(userId), accountDto(userId))
         }
+        Mailer.consume(emailAddress)
+        return response
     }
 
     fun login(request: LoginRequest): AuthResponse = db {
@@ -1399,7 +1417,7 @@ private object Repository {
     }
 
     fun channelReadStates(companyId: String, userId: String): List<com.workhub.shared.ChannelReadDto> = db {
-        val channelIds = channels(companyId, userId, memberRole(userId, companyId)).map { it.id }
+        val channelIds = channels(companyId, userId, membershipRole(userId, companyId)).map { it.id }
         ChannelReads.select { ChannelReads.userId eq userId }
             .filter { it[ChannelReads.channelId] in channelIds }
             .map {
@@ -1411,7 +1429,8 @@ private object Repository {
             }
     }
 
-    private fun memberRole(userId: String, companyId: String): String =
+    /** Gọi trong transaction đã mở — tránh nested `db {}` và trùng overload với `memberRole`. */
+    private fun membershipRole(userId: String, companyId: String): String =
         Memberships.select { (Memberships.userId eq userId) and (Memberships.workspaceId eq companyId) }
             .singleOrNull()?.get(Memberships.role) ?: "MEMBER"
 

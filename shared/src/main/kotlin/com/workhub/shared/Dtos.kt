@@ -8,11 +8,19 @@ data class RegisterRequest(
     val email: String,
     val password: String,
     val username: String = "",
+    /** Mã 6 số gửi vào email, hiệu lực 5 phút. */
+    val verifyCode: String = "",
     val companyId: String? = null,
     val divisionId: String? = null,
     val departmentId: String? = null,
     val teamId: String? = null,
 )
+
+@Serializable
+data class SendVerifyRequest(val email: String)
+
+@Serializable
+data class SendVerifyResponse(val expiresInSeconds: Int = 300)
 
 @Serializable
 data class LoginRequest(

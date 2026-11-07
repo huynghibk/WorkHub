@@ -292,7 +292,13 @@
     <string name="sign_in">Đăng nhập</string>
     <string name="create_account">Tạo tài khoản</string>
     <string name="register_title">Tạo tài khoản</string>
-    <string name="register_subtitle">Username dùng để đăng nhập. Tên hiển thị là tên mọi người thấy trong workspace.</string>
+    <string name="register_subtitle">Username dùng để đăng nhập. Mã xác thực 6 số được gửi vào email và hết hạn sau 5 phút.</string>
+    <string name="verify_send">Gửi mã</string>
+    <string name="verify_resend">Gửi lại mã</string>
+    <string name="verify_code">Mã xác thực</string>
+    <string name="verify_sent">Đã gửi mã 6 số tới email của bạn.</string>
+    <string name="verify_remaining">Mã còn hiệu lực %1$s</string>
+    <string name="verify_expired">Mã đã hết hạn. Hãy gửi lại.</string>
     <string name="display_name">Tên hiển thị</string>
     <string name="password">Mật khẩu</string>
     <string name="hide_password">Ẩn mật khẩu</string>

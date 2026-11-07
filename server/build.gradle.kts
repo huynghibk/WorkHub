@@ -39,4 +39,5 @@ dependencies {
     implementation("com.h2database:h2:2.2.224")
     implementation("org.postgresql:postgresql:42.7.3")
     implementation("org.mindrot:jbcrypt:0.4")
+    implementation("com.sun.mail:javax.mail:1.6.2")
 }
