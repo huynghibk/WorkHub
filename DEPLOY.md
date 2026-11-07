@@ -88,6 +88,20 @@ Sau đó mọi redeploy **không** xoá user/workspace nữa (data nằm trên N
 - Chỉ dùng H2 + `/data` trên Render Free → data vẫn mất khi redeploy.
 - Persistent Disk của Render cần gói trả phí.
 
+### Android Management API (MDM — khóa / xóa / QR enroll)
+
+**Không** commit `workhub-amapi-key.json` lên GitHub. Trên Render → Web Service → **Environment** thêm:
+
+| Key | Value |
+|-----|--------|
+| `AMAPI_ENTERPRISE_ID` | `enterprises/LC03vngi7h` |
+| `AMAPI_POLICY_NAME` | `enterprises/LC03vngi7h/policies/workhub_default_policy` *(tuỳ chọn)* |
+| `AMAPI_SERVICE_ACCOUNT_JSON` | **Dán nguyên nội dung** file `workhub-amapi-key.json` (cả khối `{ ... }`) |
+
+Rồi **Manual Deploy** lại. Vào app → Apps → Thiết bị → phải thấy “AMAPI sẵn sàng”.
+
+Local máy dev: để file `workhub-amapi-key.json` + `amapi_config.json` ở thư mục gốc repo (đã gitignore key).
+
 ### Gửi mã xác thực email
 
 Đăng ký gửi mã 6 số, hiệu lực **5 phút**. Trên Render → Environment:

@@ -44,6 +44,14 @@ import com.workhub.shared.TaskWrite
 import com.workhub.shared.UploadResult
 import com.workhub.shared.UserDto
 import com.workhub.shared.WsEvent
+import com.workhub.shared.MdmBindRequest
+import com.workhub.shared.MdmCloudDeviceDto
+import com.workhub.shared.MdmCommandRequest
+import com.workhub.shared.MdmCommandResult
+import com.workhub.shared.MdmDeviceDto
+import com.workhub.shared.MdmEnrollmentTokenDto
+import com.workhub.shared.MdmLocationReport
+import com.workhub.shared.MdmStatusDto
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -266,6 +274,34 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun setRole(userId: String, role: String) {
         send<Unit>(HttpMethod.Put, "/members/$userId/role", RoleUpdate(role))
     }
+
+    suspend fun mdmStatus(): MdmStatusDto = send(HttpMethod.Get, "/admin/mdm/status")
+
+    suspend fun mdmEnrollmentToken(): MdmEnrollmentTokenDto =
+        send(HttpMethod.Post, "/admin/mdm/enrollment-token")
+
+    suspend fun mdmDevices(): List<MdmDeviceDto> = send(HttpMethod.Get, "/admin/mdm/devices")
+
+    suspend fun mdmCloudDevices(): List<MdmCloudDeviceDto> =
+        send(HttpMethod.Get, "/admin/mdm/cloud-devices")
+
+    suspend fun mdmBind(userId: String, deviceName: String, displayName: String = ""): MdmDeviceDto =
+        send(HttpMethod.Post, "/admin/mdm/bind", MdmBindRequest(userId, deviceName, displayName))
+
+    suspend fun mdmLock(userId: String? = null, deviceName: String? = null): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/lock", MdmCommandRequest(userId, deviceName))
+
+    suspend fun mdmWipe(userId: String? = null, deviceName: String? = null): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/wipe", MdmCommandRequest(userId, deviceName))
+
+    suspend fun mdmPlayAlarm(userId: String): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/play-alarm", MdmCommandRequest(userId = userId))
+
+    suspend fun mdmLocationRequest(userId: String): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/location-request", MdmCommandRequest(userId = userId))
+
+    suspend fun reportDeviceLocation(locationUrl: String, deviceName: String = ""): MdmCommandResult =
+        send(HttpMethod.Post, "/me/device-location", MdmLocationReport(locationUrl, deviceName))
 
     suspend fun tasks(workspaceId: String? = null): List<TaskDto> =
         send(HttpMethod.Get, "/tasks", workspaceId = workspaceId)

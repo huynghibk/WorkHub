@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.PhonelinkLock
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -56,10 +57,12 @@ data class AppShortcut(
 @Composable
 fun AppsSheet(
     showOrg: Boolean,
+    showMdm: Boolean,
     onDismiss: () -> Unit,
     onOpenNotes: () -> Unit,
     onOpenChat: () -> Unit,
     onOpenOrg: () -> Unit,
+    onOpenMdm: () -> Unit,
     onOpenMaps: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenCalendar: () -> Unit,
@@ -100,6 +103,20 @@ fun AppsSheet(
                     tint = Color(0xFF6366F1),
                     onClick = {
                         onOpenOrg()
+                        onDismiss()
+                    },
+                ),
+            )
+        }
+        if (showMdm) {
+            add(
+                AppShortcut(
+                    id = "mdm",
+                    label = stringResource(R.string.tab_mdm),
+                    icon = Icons.Filled.PhonelinkLock,
+                    tint = Color(0xFF0F766E),
+                    onClick = {
+                        onOpenMdm()
                         onDismiss()
                     },
                 ),

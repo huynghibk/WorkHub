@@ -378,6 +378,70 @@ data class WsEvent(
     val lastReadAt: Long? = null,
     val lastMessageId: String? = null,
     val online: Boolean? = null,
+    /** MDM / device control: play_alarm, location_request, device_lock, device_wipe, location_update */
+    val deviceName: String? = null,
+    val locationUrl: String? = null,
+)
+
+@Serializable
+data class MdmStatusDto(
+    val enabled: Boolean,
+    val enterpriseId: String = "",
+    val policyName: String = "",
+)
+
+@Serializable
+data class MdmEnrollmentTokenDto(
+    val name: String = "",
+    val value: String = "",
+    val qrCode: String = "",
+    val expirationTimestamp: String = "",
+    val policyName: String = "",
+)
+
+@Serializable
+data class MdmDeviceDto(
+    val id: String,
+    val userId: String,
+    val deviceName: String,
+    val displayName: String = "",
+    val lastLocationUrl: String = "",
+    val lastLocationAt: Long = 0,
+    val userName: String = "",
+)
+
+@Serializable
+data class MdmCloudDeviceDto(
+    val name: String,
+    val state: String = "",
+    val appliedPolicyName: String = "",
+    val enrollmentTime: String = "",
+)
+
+@Serializable
+data class MdmLocationReport(
+    val locationUrl: String,
+    val deviceName: String = "",
+)
+
+@Serializable
+data class MdmBindRequest(
+    val userId: String,
+    val deviceName: String,
+    val displayName: String = "",
+)
+
+@Serializable
+data class MdmCommandRequest(
+    val userId: String? = null,
+    val deviceName: String? = null,
+)
+
+@Serializable
+data class MdmCommandResult(
+    val ok: Boolean,
+    val detail: String = "",
+    val deviceName: String = "",
 )
 
 /** Strip client-only fields before HTTP. */

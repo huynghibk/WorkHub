@@ -45,6 +45,7 @@ object DatabaseFactory {
                 MessagePins,
                 ChannelMutes,
                 PushTokens,
+                ManagedDevices,
                 Notifications,
                 Spaces,
                 SpaceMembers,
@@ -418,6 +419,26 @@ object PushTokens : Table("push_tokens") {
     val token = varchar("token", 512)
     val platform = varchar("platform", 16)
     override val primaryKey = PrimaryKey(userId, token)
+}
+
+/** Maps WorkHub users to Google AMAPI device resource names. */
+object ManagedDevices : Table("managed_devices") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val userId = varchar("user_id", ID_LEN).index()
+    val deviceName = varchar("device_name", 200)
+    val displayName = varchar("display_name", 120).default("")
+    val lastLocationUrl = varchar("last_location_url", URL_LEN).nullable()
+    val lastLocationAt = long("last_location_at").nullable()
+    val createdAt = sysCreatedAt()
+    val updatedAt = sysUpdatedAt()
+    val isActive = sysIsActive()
+    val deletedAt = sysDeletedAt()
+    override val primaryKey = PrimaryKey(id)
+
+    init {
+        uniqueIndex(companyId, deviceName)
+    }
 }
 
 object Messages : Table("messages") {

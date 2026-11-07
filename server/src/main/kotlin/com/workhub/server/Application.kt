@@ -43,6 +43,14 @@ import com.workhub.shared.WorkTree
 import com.workhub.shared.WorkspaceCreate
 import com.workhub.shared.WorkspaceDto
 import com.workhub.shared.WsEvent
+import com.workhub.shared.MdmBindRequest
+import com.workhub.shared.MdmCommandRequest
+import com.workhub.shared.MdmCommandResult
+import com.workhub.shared.MdmDeviceDto
+import com.workhub.shared.MdmEnrollmentTokenDto
+import com.workhub.shared.MdmCloudDeviceDto
+import com.workhub.shared.MdmLocationReport
+import com.workhub.shared.MdmStatusDto
 import org.jetbrains.exposed.sql.ResultRow
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -211,6 +219,70 @@ fun Application.module() {
                     call.requireWorkspaceAdmin()
                     call.respond(HttpStatusCode.Created, Repository.createTeam(call.companyId(), call.receive()))
                 }
+                route("/mdm") {
+                    get("/status") {
+                        call.requireManager()
+                        call.respond(
+                            MdmStatusDto(
+                                enabled = Amapi.enabled(),
+                                enterpriseId = Amapi.enterpriseId(),
+                                policyName = Amapi.policyName(),
+                            ),
+                        )
+                    }
+                    post("/enrollment-token") {
+                        call.requireManager()
+                        val token = Amapi.createEnrollmentToken()
+                        call.respond(
+                            HttpStatusCode.Created,
+                            MdmEnrollmentTokenDto(
+                                name = token.name,
+                                value = token.value,
+                                qrCode = token.qrCode,
+                                expirationTimestamp = token.expirationTimestamp,
+                                policyName = token.policyName,
+                            ),
+                        )
+                    }
+                    get("/devices") {
+                        call.requireManager()
+                        call.respond(Repository.listManagedDevices(call.companyId()))
+                    }
+                    get("/cloud-devices") {
+                        call.requireManager()
+                        call.respond(Amapi.listDevices().map {
+                            MdmCloudDeviceDto(
+                                name = it.name,
+                                state = it.state,
+                                appliedPolicyName = it.appliedPolicyName,
+                                enrollmentTime = it.enrollmentTime,
+                            )
+                        })
+                    }
+                    post("/bind") {
+                        call.requireManager()
+                        call.respond(
+                            HttpStatusCode.Created,
+                            Repository.bindManagedDevice(call.companyId(), call.receive()),
+                        )
+                    }
+                    post("/lock") {
+                        call.requireManager()
+                        call.respond(executeMdmCommand(call.companyId(), call.receive(), MdmAction.LOCK))
+                    }
+                    post("/wipe") {
+                        call.requireManager()
+                        call.respond(executeMdmCommand(call.companyId(), call.receive(), MdmAction.WIPE))
+                    }
+                    post("/play-alarm") {
+                        call.requireManager()
+                        call.respond(publishMdmWs(call.companyId(), call.receive(), "play_alarm"))
+                    }
+                    post("/location-request") {
+                        call.requireManager()
+                        call.respond(publishMdmWs(call.companyId(), call.receive(), "location_request"))
+                    }
+                }
             }
             put("/members/{memberId}/role") {
                 call.requireWorkspaceAdmin()
@@ -224,6 +296,21 @@ fun Application.module() {
                 post { call.respond(Repository.updateProfile(call.userId(), call.receive())) }
                 post("/profile") {
                     call.respond(Repository.updateProfile(call.userId(), call.receive()))
+                }
+                post("/device-location") {
+                    val report = call.receive<MdmLocationReport>()
+                    Repository.reportDeviceLocation(call.companyId(), call.userId(), report)
+                    val payload = json.encodeToString(
+                        WsEvent.serializer(),
+                        WsEvent(
+                            type = "location_update",
+                            userId = call.userId(),
+                            deviceName = report.deviceName,
+                            locationUrl = report.locationUrl,
+                        ),
+                    )
+                    ChatHub.publish(call.companyId(), payload)
+                    call.respond(MdmCommandResult(ok = true, detail = "Đã cập nhật vị trí"))
                 }
             }
             // Endpoint rõ ràng — client ưu tiên path này.
@@ -589,6 +676,61 @@ private fun deliverNotices(companyId: String, notices: List<PendingNotice>) {
     }
 }
 
+private enum class MdmAction { LOCK, WIPE }
+
+private fun resolveMdmDevice(companyId: String, request: MdmCommandRequest): Pair<String?, String> {
+    val byName = request.deviceName?.trim()?.takeIf { it.isNotEmpty() }
+    if (byName != null) {
+        val userId = Repository.findManagedDeviceUser(companyId, byName)
+        return userId to byName
+    }
+    val userId = request.userId?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw AppException(HttpStatusCode.BadRequest, "Cần userId hoặc deviceName")
+    val deviceName = Repository.findManagedDeviceName(companyId, userId)
+        ?: throw AppException(HttpStatusCode.NotFound, "Chưa gắn thiết bị AMAPI cho user này")
+    return userId to deviceName
+}
+
+private fun executeMdmCommand(companyId: String, request: MdmCommandRequest, action: MdmAction): MdmCommandResult {
+    val (userId, deviceName) = resolveMdmDevice(companyId, request)
+    when (action) {
+        MdmAction.LOCK -> Amapi.lockDevice(deviceName)
+        MdmAction.WIPE -> {
+            Amapi.wipeDevice(deviceName)
+            Repository.unbindManagedDevice(companyId, deviceName)
+        }
+    }
+    if (userId != null) {
+        val type = if (action == MdmAction.LOCK) "device_lock" else "device_wipe"
+        val payload = json.encodeToString(
+            WsEvent.serializer(),
+            WsEvent(type = type, userId = userId, deviceName = deviceName),
+        )
+        ChatHub.publishToUser(userId, payload)
+    }
+    return MdmCommandResult(
+        ok = true,
+        detail = if (action == MdmAction.LOCK) "Đã gửi lệnh LOCK" else "Đã gửi lệnh WIPE",
+        deviceName = deviceName,
+    )
+}
+
+private fun publishMdmWs(companyId: String, request: MdmCommandRequest, type: String): MdmCommandResult {
+    val userId = request.userId?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw AppException(HttpStatusCode.BadRequest, "Cần userId")
+    if (Repository.memberRole(userId, companyId) == null) {
+        throw AppException(HttpStatusCode.NotFound, "User không thuộc workspace")
+    }
+    val deviceName = request.deviceName?.trim().orEmpty()
+        .ifBlank { Repository.findManagedDeviceName(companyId, userId).orEmpty() }
+    val payload = json.encodeToString(
+        WsEvent.serializer(),
+        WsEvent(type = type, userId = userId, deviceName = deviceName.ifBlank { null }),
+    )
+    ChatHub.publishToUser(userId, payload)
+    return MdmCommandResult(ok = true, detail = "Đã gửi $type qua WebSocket", deviceName = deviceName)
+}
+
 private fun handleClientWsEvent(
     companyId: String,
     userId: String,
@@ -855,6 +997,120 @@ private object Repository {
         }
         Memberships.update({ Memberships.id eq target[Memberships.id] }) {
             it[role] = newRole
+        }
+    }
+
+    fun listManagedDevices(companyId: String): List<MdmDeviceDto> = db {
+        val names = memberNames(companyId)
+        ManagedDevices.select {
+            (ManagedDevices.companyId eq companyId) and
+                usable(ManagedDevices.isActive, ManagedDevices.deletedAt)
+        }.map { row ->
+            val userId = row[ManagedDevices.userId]
+            MdmDeviceDto(
+                id = row[ManagedDevices.id],
+                userId = userId,
+                deviceName = row[ManagedDevices.deviceName],
+                displayName = row[ManagedDevices.displayName],
+                lastLocationUrl = row[ManagedDevices.lastLocationUrl].orEmpty(),
+                lastLocationAt = row[ManagedDevices.lastLocationAt] ?: 0L,
+                userName = names[userId].orEmpty(),
+            )
+        }
+    }
+
+    fun reportDeviceLocation(companyId: String, userId: String, report: MdmLocationReport) = db {
+        val url = cleanLocationUrl(report.locationUrl)
+            ?: throw AppException(HttpStatusCode.BadRequest, "Link vị trí không hợp lệ")
+        val now = System.currentTimeMillis()
+        val deviceName = report.deviceName.trim().takeIf { it.isNotEmpty() }
+        val rows = ManagedDevices.select {
+            (ManagedDevices.companyId eq companyId) and
+                (ManagedDevices.userId eq userId) and
+                usable(ManagedDevices.isActive, ManagedDevices.deletedAt)
+        }.toList()
+        val target = if (deviceName != null) {
+            rows.firstOrNull { it[ManagedDevices.deviceName] == deviceName } ?: rows.firstOrNull()
+        } else {
+            rows.firstOrNull()
+        }
+        if (target != null) {
+            ManagedDevices.update({ ManagedDevices.id eq target[ManagedDevices.id] }) {
+                it[lastLocationUrl] = url
+                it[lastLocationAt] = now
+                it[updatedAt] = now
+            }
+        }
+    }
+
+    fun bindManagedDevice(companyId: String, request: MdmBindRequest): MdmDeviceDto = db {
+        val userId = request.userId.trim()
+        val deviceName = request.deviceName.trim()
+        if (userId.isEmpty() || deviceName.isEmpty()) {
+            throw AppException(HttpStatusCode.BadRequest, "Thiếu userId hoặc deviceName")
+        }
+        val inWorkspace = Memberships.select {
+            (Memberships.userId eq userId) and
+                (Memberships.workspaceId eq companyId) and
+                usable(Memberships.isActive, Memberships.deletedAt)
+        }.any()
+        if (!inWorkspace) {
+            throw AppException(HttpStatusCode.NotFound, "User không thuộc workspace")
+        }
+        val existing = ManagedDevices.select {
+            (ManagedDevices.companyId eq companyId) and (ManagedDevices.deviceName eq deviceName)
+        }.singleOrNull()
+        val id = if (existing != null) {
+            ManagedDevices.update({ ManagedDevices.id eq existing[ManagedDevices.id] }) {
+                it[ManagedDevices.userId] = userId
+                it[ManagedDevices.displayName] = request.displayName.trim().take(120)
+                it[ManagedDevices.isActive] = true
+                it[ManagedDevices.deletedAt] = null
+                it[ManagedDevices.updatedAt] = System.currentTimeMillis()
+            }
+            existing[ManagedDevices.id]
+        } else {
+            val newId = nextId()
+            ManagedDevices.insert {
+                it[ManagedDevices.id] = newId
+                it[ManagedDevices.companyId] = companyId
+                it[ManagedDevices.userId] = userId
+                it[ManagedDevices.deviceName] = deviceName
+                it[ManagedDevices.displayName] = request.displayName.trim().take(120)
+            }
+            newId
+        }
+        MdmDeviceDto(
+            id = id,
+            userId = userId,
+            deviceName = deviceName,
+            displayName = request.displayName.trim().take(120),
+        )
+    }
+
+    fun findManagedDeviceName(companyId: String, userId: String): String? = db {
+        ManagedDevices.select {
+            (ManagedDevices.companyId eq companyId) and
+                (ManagedDevices.userId eq userId) and
+                usable(ManagedDevices.isActive, ManagedDevices.deletedAt)
+        }.firstOrNull()?.get(ManagedDevices.deviceName)
+    }
+
+    fun findManagedDeviceUser(companyId: String, deviceName: String): String? = db {
+        ManagedDevices.select {
+            (ManagedDevices.companyId eq companyId) and
+                (ManagedDevices.deviceName eq deviceName) and
+                usable(ManagedDevices.isActive, ManagedDevices.deletedAt)
+        }.singleOrNull()?.get(ManagedDevices.userId)
+    }
+
+    fun unbindManagedDevice(companyId: String, deviceName: String) = db {
+        ManagedDevices.update({
+            (ManagedDevices.companyId eq companyId) and (ManagedDevices.deviceName eq deviceName)
+        }) {
+            it[isActive] = false
+            it[deletedAt] = System.currentTimeMillis()
+            it[updatedAt] = System.currentTimeMillis()
         }
     }
 

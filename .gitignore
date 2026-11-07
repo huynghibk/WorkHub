@@ -17,6 +17,8 @@ server/data/
 *.key
 *.pem
 ssh-key*
+workhub-amapi-key.json
+*-amapi-key.json
 local-m2/
 dist/
 *.apk

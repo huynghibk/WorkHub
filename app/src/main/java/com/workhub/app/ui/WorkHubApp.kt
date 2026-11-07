@@ -354,6 +354,7 @@ fun WorkHubNav() {
 @Composable
 private fun MainNav() {
     NotificationBinder()
+    DeviceCommandBinder()
     val graph = LocalAppGraph.current
     val session by graph.session.state.collectAsState(initial = null)
     val tabs = primaryTabs()
@@ -462,7 +463,7 @@ private fun MainNav() {
                 SoftTabBar(
                     tabs = tabs,
                     selectedRoute = route,
-                    appsHighlighted = appsOpen || route == "notes" || route == "org",
+                    appsHighlighted = appsOpen || route == "notes" || route == "org" || route == "mdm",
                     onSelect = { tab ->
                         appsOpen = false
                         go(tab.route)
@@ -504,6 +505,7 @@ private fun MainNav() {
                 )
             }
             composable("org") { AdminOrgScreen() }
+            composable("mdm") { MdmScreen() }
             composable("maps") {
                 MapsInAppScreen(
                     onBack = { nav.popBackStack() },
@@ -554,10 +556,12 @@ private fun MainNav() {
     if (appsOpen) {
         AppsSheet(
             showOrg = session?.workspace?.role == "ADMIN",
+            showMdm = canManageDevices(session?.workspace?.role),
             onDismiss = { appsOpen = false },
             onOpenNotes = { go("notes") },
             onOpenChat = { go("chat") },
             onOpenOrg = { go("org") },
+            onOpenMdm = { go("mdm") },
             onOpenMaps = {
                 appsOpen = false
                 openTool("maps")

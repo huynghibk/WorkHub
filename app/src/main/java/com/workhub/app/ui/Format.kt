@@ -86,6 +86,9 @@ fun roleLabel(role: String): String = when (role) {
 
 fun canManageContent(role: String?): Boolean = role == "ADMIN" || role == "SUPERVISOR"
 
+/** Giám đốc / phó / giám sát / trưởng bộ phận (ADMIN + SUPERVISOR) quản lý thiết bị MDM. */
+fun canManageDevices(role: String?): Boolean = canManageContent(role)
+
 fun canEditTask(task: TaskDto, userId: String?): Boolean {
     if (userId.isNullOrBlank()) return false
     val assignees = task.assigneeIds.ifEmpty { listOfNotNull(task.assigneeId) }

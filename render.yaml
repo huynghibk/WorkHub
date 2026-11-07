@@ -28,3 +28,11 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Android Management API — Dashboard → Environment (không commit file key vào git).
+      # AMAPI_SERVICE_ACCOUNT_JSON = dán nguyên nội dung workhub-amapi-key.json
+      - key: AMAPI_ENTERPRISE_ID
+        sync: false
+      - key: AMAPI_POLICY_NAME
+        sync: false
+      - key: AMAPI_SERVICE_ACCOUNT_JSON
+        sync: false
