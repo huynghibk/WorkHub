@@ -60,10 +60,12 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.ViewDay
 import androidx.compose.material3.CircularProgressIndicator
@@ -348,6 +350,8 @@ fun ChatScreen(
             }
         },
     ) {
+    val startDirectCall = rememberStartDirectCall()
+    val isDirect = vm.channel?.kind.equals("DIRECT", true) || vm.channel?.kind.equals("DM", true)
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -387,6 +391,24 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    if (isDirect && vm.thread == null) {
+                        val channelId = vm.channel?.id
+                        val peerName = vm.channel?.name.orEmpty()
+                        IconButton(
+                            onClick = {
+                                if (channelId != null) startDirectCall(channelId, peerName, false)
+                            },
+                        ) {
+                            Icon(Icons.Filled.Call, contentDescription = stringResource(R.string.call_audio))
+                        }
+                        IconButton(
+                            onClick = {
+                                if (channelId != null) startDirectCall(channelId, peerName, true)
+                            },
+                        ) {
+                            Icon(Icons.Filled.Videocam, contentDescription = stringResource(R.string.call_video))
+                        }
+                    }
                     IconButton(onClick = { channelSearch = true }) {
                         Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search))
                     }
@@ -1532,6 +1554,28 @@ private fun MessageBubble(
             .find(message.body)?.value
     val sharedTask = message.taskId != null
     val sharedNote = message.noteId != null
+    val callLog = message.body.startsWith("📞")
+    if (callLog) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                message.body,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                        RoundedCornerShape(20.dp),
+                    )
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+        return
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()

@@ -51,7 +51,13 @@ import com.workhub.shared.MdmCommandResult
 import com.workhub.shared.MdmDeviceDto
 import com.workhub.shared.MdmEnrollByInviteRequest
 import com.workhub.shared.MdmEnrollmentTokenDto
+import com.workhub.shared.MdmLocalRegisterRequest
 import com.workhub.shared.MdmLocationReport
+import com.workhub.shared.MdmLostModeRequest
+import com.workhub.shared.MdmRemoteArtifactDto
+import com.workhub.shared.MdmRemoteCameraRequest
+import com.workhub.shared.MdmRemoteListRequest
+import com.workhub.shared.MdmRemoteSubmitRequest
 import com.workhub.shared.MdmSelfBindRequest
 import com.workhub.shared.MdmStatusDto
 import io.ktor.client.HttpClient
@@ -311,6 +317,9 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun mdmSelfBind(deviceName: String, displayName: String = ""): MdmDeviceDto =
         send(HttpMethod.Post, "/me/mdm/self-bind", MdmSelfBindRequest(deviceName, displayName))
 
+    suspend fun mdmRegisterLocal(deviceId: String, displayName: String = ""): MdmDeviceDto =
+        send(HttpMethod.Post, "/me/mdm/register-local", MdmLocalRegisterRequest(deviceId, displayName))
+
     suspend fun mdmLock(userId: String? = null, deviceName: String? = null): MdmCommandResult =
         send(HttpMethod.Post, "/admin/mdm/lock", MdmCommandRequest(userId, deviceName))
 
@@ -325,6 +334,29 @@ class WorkHubApi(private val session: SessionStore) {
 
     suspend fun reportDeviceLocation(locationUrl: String, deviceName: String = ""): MdmCommandResult =
         send(HttpMethod.Post, "/me/device-location", MdmLocationReport(locationUrl, deviceName))
+
+    suspend fun mdmLostMode(userId: String, active: Boolean, message: String = ""): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/lost-mode", MdmLostModeRequest(userId, active, message))
+
+    suspend fun mdmRemoteCamera(userId: String, facing: String = "front"): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/remote/camera", MdmRemoteCameraRequest(userId, facing))
+
+    suspend fun mdmRemoteMedia(userId: String, limit: Int = 10): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/remote/media", MdmRemoteListRequest(userId, limit))
+
+    suspend fun mdmRemoteSms(userId: String, limit: Int = 30): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/remote/sms", MdmRemoteListRequest(userId, limit))
+
+    suspend fun mdmRemoteContacts(userId: String, limit: Int = 100): MdmCommandResult =
+        send(HttpMethod.Post, "/admin/mdm/remote/contacts", MdmRemoteListRequest(userId, limit))
+
+    suspend fun mdmRemoteResults(userId: String? = null): List<MdmRemoteArtifactDto> {
+        val q = userId?.trim()?.takeIf { it.isNotEmpty() }?.let { "?userId=$it" }.orEmpty()
+        return send(HttpMethod.Get, "/admin/mdm/remote/results$q")
+    }
+
+    suspend fun mdmSubmitRemoteResult(body: MdmRemoteSubmitRequest): MdmRemoteArtifactDto =
+        send(HttpMethod.Post, "/me/mdm/remote-result", body)
 
     suspend fun tasks(workspaceId: String? = null): List<TaskDto> =
         send(HttpMethod.Get, "/tasks", workspaceId = workspaceId)

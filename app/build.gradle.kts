@@ -88,4 +88,6 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
+
+    implementation("io.getstream:stream-webrtc-android:1.3.8")
 }

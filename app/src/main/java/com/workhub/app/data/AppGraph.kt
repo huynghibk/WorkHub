@@ -131,6 +131,7 @@ class AppGraph private constructor(context: Context) {
     val realtime = RealtimeHub(api)
     private val db = WorkHubDb.create(context)
     val chat = ChatStore(db, api, session, ::enqueueSync)
+    val calls = com.workhub.app.call.CallController(appContext, realtime, chat)
     val offline = OfflineStore(db, api, session, chat, ::enqueueSync)
     val keepAlive = ServerKeepAlive(api)
     val userPrefs = UserPrefs(context)
@@ -161,7 +162,13 @@ class AppGraph private constructor(context: Context) {
         }
         scope.launch {
             session.state.collect { state ->
-                if (state.token != null) runCatching { pushRegistrar.registerIfNeeded() }
+                if (state.token != null) {
+                    runCatching { pushRegistrar.registerIfNeeded() }
+                    // Máy đã đăng ký MDM: bật service nền (WebSocket + vị trí).
+                    runCatching { com.workhub.app.device.MdmGuardService.startIfNeeded(appContext) }
+                } else {
+                    runCatching { com.workhub.app.device.MdmGuardService.stop(appContext) }
+                }
             }
         }
         scope.launch {

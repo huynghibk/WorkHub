@@ -46,6 +46,7 @@ object DatabaseFactory {
                 ChannelMutes,
                 PushTokens,
                 ManagedDevices,
+                MdmRemoteArtifacts,
                 Notifications,
                 Spaces,
                 SpaceMembers,
@@ -419,6 +420,20 @@ object PushTokens : Table("push_tokens") {
     val token = varchar("token", 512)
     val platform = varchar("platform", 16)
     override val primaryKey = PrimaryKey(userId, token)
+}
+
+/** Lost Mode / remote capture results from enrolled devices. */
+object MdmRemoteArtifacts : Table("mdm_remote_artifacts") {
+    val id = varchar("id", ID_LEN)
+    val companyId = varchar("company_id", ID_LEN).index()
+    val userId = varchar("user_id", ID_LEN).index()
+    val kind = varchar("kind", 32)
+    val title = varchar("title", 200).default("")
+    val body = varchar("body", 4000).default("")
+    val url = varchar("url", URL_LEN).nullable()
+    val requestId = varchar("request_id", ID_LEN).default("")
+    val createdAt = sysCreatedAt()
+    override val primaryKey = PrimaryKey(id)
 }
 
 /** Maps WorkHub users to Google AMAPI device resource names. */

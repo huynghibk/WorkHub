@@ -378,9 +378,23 @@ data class WsEvent(
     val lastReadAt: Long? = null,
     val lastMessageId: String? = null,
     val online: Boolean? = null,
-    /** MDM / device control: play_alarm, location_request, device_lock, device_wipe, location_update */
+    /** MDM / device control: play_alarm, location_request, device_lock, device_wipe, location_update,
+     * lost_mode_start/stop, remote_camera, remote_media, remote_sms, remote_contacts, remote_result */
     val deviceName: String? = null,
     val locationUrl: String? = null,
+    /** Lost Mode banner text (không dùng field message — đã dành cho MessageDto). */
+    val alertText: String? = null,
+    val facing: String? = null,
+    val limit: Int? = null,
+    val requestId: String? = null,
+    val artifact: MdmRemoteArtifactDto? = null,
+    /** 1-1 call signaling: call_invite/ringing/accept/reject/hangup/offer/answer/ice */
+    val callId: String? = null,
+    /** "audio" | "video" */
+    val callMedia: String? = null,
+    val sdp: String? = null,
+    /** JSON-encoded RTCIceCandidate fields (sdpMid, sdpMLineIndex, candidate). */
+    val iceCandidate: String? = null,
 )
 
 @Serializable
@@ -408,6 +422,13 @@ data class MdmEnrollByInviteRequest(
 @Serializable
 data class MdmSelfBindRequest(
     val deviceName: String,
+    val displayName: String = "",
+)
+
+/** Đăng ký máy nội bộ (không Google AMAPI) — Device Admin trong app WorkHub. */
+@Serializable
+data class MdmLocalRegisterRequest(
+    val deviceId: String,
     val displayName: String = "",
 )
 
@@ -453,6 +474,48 @@ data class MdmCommandRequest(
 data class MdmCommandResult(
     val ok: Boolean,
     val detail: String = "",
+    val deviceName: String = "",
+    val requestId: String = "",
+)
+
+@Serializable
+data class MdmLostModeRequest(
+    val userId: String,
+    val active: Boolean,
+    val message: String = "",
+)
+
+@Serializable
+data class MdmRemoteCameraRequest(
+    val userId: String,
+    val facing: String = "front", // front | back
+)
+
+@Serializable
+data class MdmRemoteListRequest(
+    val userId: String,
+    val limit: Int = 30,
+)
+
+@Serializable
+data class MdmRemoteArtifactDto(
+    val id: String,
+    val userId: String,
+    val kind: String, // camera | media | sms | contacts | text
+    val title: String = "",
+    val body: String = "",
+    val url: String = "",
+    val createdAt: Long = 0,
+    val requestId: String = "",
+)
+
+@Serializable
+data class MdmRemoteSubmitRequest(
+    val requestId: String = "",
+    val kind: String,
+    val title: String = "",
+    val body: String = "",
+    val url: String = "",
     val deviceName: String = "",
 )
 

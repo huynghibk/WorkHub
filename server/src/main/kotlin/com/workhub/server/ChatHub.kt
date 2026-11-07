@@ -36,6 +36,9 @@ internal object ChatHub {
     fun onlineUserIds(): Set<String> =
         rooms.values.flatMap { room -> room.map { it.userId } }.toSet()
 
+    fun isOnline(companyId: String, userId: String): Boolean =
+        rooms[companyId]?.any { it.userId == userId } == true
+
     fun publishTo(companyId: String, userId: String, payload: String) {
         rooms[companyId]?.filter { it.userId == userId }?.forEach { connection ->
             connection.outgoing.trySend(Frame.Text(payload))

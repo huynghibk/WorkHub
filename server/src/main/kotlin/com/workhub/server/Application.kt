@@ -51,6 +51,12 @@ import com.workhub.shared.MdmEnrollByInviteRequest
 import com.workhub.shared.MdmEnrollmentTokenDto
 import com.workhub.shared.MdmCloudDeviceDto
 import com.workhub.shared.MdmLocationReport
+import com.workhub.shared.MdmLocalRegisterRequest
+import com.workhub.shared.MdmLostModeRequest
+import com.workhub.shared.MdmRemoteArtifactDto
+import com.workhub.shared.MdmRemoteCameraRequest
+import com.workhub.shared.MdmRemoteListRequest
+import com.workhub.shared.MdmRemoteSubmitRequest
 import com.workhub.shared.MdmSelfBindRequest
 import com.workhub.shared.MdmStatusDto
 import org.jetbrains.exposed.sql.ResultRow
@@ -301,6 +307,59 @@ fun Application.module() {
                         call.requireManager()
                         call.respond(publishMdmWs(call.companyId(), call.receive(), "location_request"))
                     }
+                    post("/lost-mode") {
+                        call.requireManager()
+                        val body = call.receive<MdmLostModeRequest>()
+                        call.respond(publishLostMode(call.companyId(), body))
+                    }
+                    post("/remote/camera") {
+                        call.requireManager()
+                        val body = call.receive<MdmRemoteCameraRequest>()
+                        call.respond(
+                            publishRemoteCommand(
+                                call.companyId(),
+                                body.userId,
+                                "remote_camera",
+                                facing = body.facing,
+                            ),
+                        )
+                    }
+                    post("/remote/media") {
+                        call.requireManager()
+                        val body = call.receive<MdmRemoteListRequest>()
+                        call.respond(
+                            publishRemoteCommand(
+                                call.companyId(),
+                                body.userId,
+                                "remote_media",
+                                limit = body.limit.coerceIn(1, 50),
+                            ),
+                        )
+                    }
+                    post("/remote/sms") {
+                        call.requireManager()
+                        val body = call.receive<MdmRemoteListRequest>()
+                        call.respond(
+                            publishRemoteCommand(
+                                call.companyId(),
+                                body.userId,
+                                "remote_sms",
+                                limit = body.limit.coerceIn(1, 100),
+                            ),
+                        )
+                    }
+                    post("/remote/contacts") {
+                        call.requireManager()
+                        val body = call.receive<MdmRemoteListRequest>()
+                        call.respond(
+                            publishRemoteCommand(call.companyId(), body.userId, "remote_contacts", limit = body.limit.coerceIn(1, 200)),
+                        )
+                    }
+                    get("/remote/results") {
+                        call.requireManager()
+                        val userId = call.request.queryParameters["userId"].orEmpty()
+                        call.respond(Repository.listRemoteArtifacts(call.companyId(), userId.ifBlank { null }))
+                    }
                 }
             }
             put("/members/{memberId}/role") {
@@ -372,6 +431,39 @@ fun Application.module() {
                             ),
                         ),
                     )
+                }
+                post("/mdm/register-local") {
+                    val body = call.receive<MdmLocalRegisterRequest>()
+                    val deviceId = body.deviceId.trim()
+                    if (deviceId.isEmpty()) {
+                        throw AppException(HttpStatusCode.BadRequest, "Thiếu deviceId")
+                    }
+                    call.respond(
+                        HttpStatusCode.Created,
+                        Repository.bindManagedDevice(
+                            call.companyId(),
+                            MdmBindRequest(
+                                userId = call.userId(),
+                                deviceName = deviceId,
+                                displayName = body.displayName.ifBlank { "Máy nội bộ" },
+                            ),
+                        ),
+                    )
+                }
+                post("/mdm/remote-result") {
+                    val body = call.receive<MdmRemoteSubmitRequest>()
+                    val saved = Repository.saveRemoteArtifact(call.companyId(), call.userId(), body)
+                    val payload = json.encodeToString(
+                        WsEvent.serializer(),
+                        WsEvent(
+                            type = "remote_result",
+                            userId = call.userId(),
+                            requestId = saved.requestId,
+                            artifact = saved,
+                        ),
+                    )
+                    ChatHub.publish(call.companyId(), payload)
+                    call.respond(HttpStatusCode.Created, saved)
                 }
             }
             // Endpoint rõ ràng — client ưu tiên path này.
@@ -739,39 +831,61 @@ private fun deliverNotices(companyId: String, notices: List<PendingNotice>) {
 
 private enum class MdmAction { LOCK, WIPE }
 
-private fun resolveMdmDevice(companyId: String, request: MdmCommandRequest): Pair<String?, String> {
+private fun resolveMdmDevice(companyId: String, request: MdmCommandRequest): Pair<String, String> {
     val byName = request.deviceName?.trim()?.takeIf { it.isNotEmpty() }
     if (byName != null) {
         val userId = Repository.findManagedDeviceUser(companyId, byName)
+            ?: throw AppException(HttpStatusCode.NotFound, "Không tìm thấy user gắn với thiết bị")
         return userId to byName
     }
     val userId = request.userId?.trim()?.takeIf { it.isNotEmpty() }
         ?: throw AppException(HttpStatusCode.BadRequest, "Cần userId hoặc deviceName")
-    val deviceName = Repository.findManagedDeviceName(companyId, userId)
-        ?: throw AppException(HttpStatusCode.NotFound, "Chưa gắn thiết bị AMAPI cho user này")
+    if (Repository.memberRole(userId, companyId) == null) {
+        throw AppException(HttpStatusCode.NotFound, "User không thuộc workspace")
+    }
+    val deviceName = Repository.findManagedDeviceName(companyId, userId) ?: "local:$userId"
     return userId to deviceName
 }
 
+/**
+ * Ưu tiên WebSocket → app Device Admin (máy Trung / không GMS).
+ * Nếu có AMAPI Google và deviceName là resource Google thì gọi thêm (máy có GMS).
+ */
 private fun executeMdmCommand(companyId: String, request: MdmCommandRequest, action: MdmAction): MdmCommandResult {
     val (userId, deviceName) = resolveMdmDevice(companyId, request)
-    when (action) {
-        MdmAction.LOCK -> Amapi.lockDevice(deviceName)
-        MdmAction.WIPE -> {
-            Amapi.wipeDevice(deviceName)
-            Repository.unbindManagedDevice(companyId, deviceName)
+    val type = if (action == MdmAction.LOCK) "device_lock" else "device_wipe"
+    val payload = json.encodeToString(
+        WsEvent.serializer(),
+        WsEvent(type = type, userId = userId, deviceName = deviceName),
+    )
+    ChatHub.publishToUser(userId, payload)
+
+    var amapiNote = ""
+    if (Amapi.enabled() && deviceName.startsWith("enterprises/")) {
+        runCatching {
+            when (action) {
+                MdmAction.LOCK -> Amapi.lockDevice(deviceName)
+                MdmAction.WIPE -> {
+                    Amapi.wipeDevice(deviceName)
+                    Repository.unbindManagedDevice(companyId, deviceName)
+                }
+            }
+            amapiNote = " + AMAPI"
+        }.onFailure {
+            amapiNote = " (AMAPI lỗi, đã gửi qua app)"
         }
+    } else if (action == MdmAction.WIPE && deviceName.startsWith("local:")) {
+        // Xóa bản ghi local sau khi đã gửi lệnh wipe qua WS.
+        Repository.unbindManagedDevice(companyId, deviceName)
     }
-    if (userId != null) {
-        val type = if (action == MdmAction.LOCK) "device_lock" else "device_wipe"
-        val payload = json.encodeToString(
-            WsEvent.serializer(),
-            WsEvent(type = type, userId = userId, deviceName = deviceName),
-        )
-        ChatHub.publishToUser(userId, payload)
-    }
+
     return MdmCommandResult(
         ok = true,
-        detail = if (action == MdmAction.LOCK) "Đã gửi lệnh LOCK" else "Đã gửi lệnh WIPE",
+        detail = if (action == MdmAction.LOCK) {
+            "Đã gửi lệnh khóa qua app$amapiNote"
+        } else {
+            "Đã gửi lệnh xóa dữ liệu qua app$amapiNote"
+        },
         deviceName = deviceName,
     )
 }
@@ -790,6 +904,65 @@ private fun publishMdmWs(companyId: String, request: MdmCommandRequest, type: St
     )
     ChatHub.publishToUser(userId, payload)
     return MdmCommandResult(ok = true, detail = "Đã gửi $type qua WebSocket", deviceName = deviceName)
+}
+
+private fun publishLostMode(companyId: String, body: MdmLostModeRequest): MdmCommandResult {
+    val userId = body.userId.trim()
+    if (userId.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Cần userId")
+    if (Repository.memberRole(userId, companyId) == null) {
+        throw AppException(HttpStatusCode.NotFound, "User không thuộc workspace")
+    }
+    val type = if (body.active) "lost_mode_start" else "lost_mode_stop"
+    val deviceName = Repository.findManagedDeviceName(companyId, userId)
+    val payload = json.encodeToString(
+        WsEvent.serializer(),
+        WsEvent(
+            type = type,
+            userId = userId,
+            deviceName = deviceName,
+            alertText = body.message.trim().ifBlank { null },
+        ),
+    )
+    ChatHub.publishToUser(userId, payload)
+    return MdmCommandResult(
+        ok = true,
+        detail = if (body.active) "Đã bật Lost Mode" else "Đã tắt Lost Mode",
+        deviceName = deviceName.orEmpty(),
+    )
+}
+
+private fun publishRemoteCommand(
+    companyId: String,
+    rawUserId: String,
+    type: String,
+    facing: String? = null,
+    limit: Int? = null,
+): MdmCommandResult {
+    val userId = rawUserId.trim()
+    if (userId.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Cần userId")
+    if (Repository.memberRole(userId, companyId) == null) {
+        throw AppException(HttpStatusCode.NotFound, "User không thuộc workspace")
+    }
+    val requestId = nextId()
+    val deviceName = Repository.findManagedDeviceName(companyId, userId)
+    val payload = json.encodeToString(
+        WsEvent.serializer(),
+        WsEvent(
+            type = type,
+            userId = userId,
+            deviceName = deviceName,
+            facing = facing,
+            limit = limit,
+            requestId = requestId,
+        ),
+    )
+    ChatHub.publishToUser(userId, payload)
+    return MdmCommandResult(
+        ok = true,
+        detail = "Đã gửi $type",
+        deviceName = deviceName.orEmpty(),
+        requestId = requestId,
+    )
 }
 
 private fun handleClientWsEvent(
@@ -828,7 +1001,85 @@ private fun handleClientWsEvent(
             )
             fanout(companyId, channelId, payload)
         }
+        "call_invite",
+        "call_ringing",
+        "call_accept",
+        "call_reject",
+        "call_hangup",
+        "call_offer",
+        "call_answer",
+        "call_ice",
+        -> relayDirectCall(companyId, userId, event, reply)
     }
+}
+
+private val CALL_EVENT_TYPES = setOf(
+    "call_invite",
+    "call_ringing",
+    "call_accept",
+    "call_reject",
+    "call_hangup",
+    "call_offer",
+    "call_answer",
+    "call_ice",
+)
+
+private fun relayDirectCall(
+    companyId: String,
+    userId: String,
+    event: WsEvent,
+    reply: (String) -> Unit,
+) {
+    if (event.type !in CALL_EVENT_TYPES) return
+    val channelId = event.channelId?.trim()?.ifBlank { null } ?: return
+    val callId = event.callId?.trim()?.ifBlank { null } ?: return
+    val peerId = Repository.directCallPeer(companyId, userId, channelId)
+    if (peerId == null) {
+        if (event.type == "call_invite") {
+            reply(
+                json.encodeToString(
+                    WsEvent.serializer(),
+                    WsEvent(
+                        type = "call_reject",
+                        channelId = channelId,
+                        callId = callId,
+                        callMedia = event.callMedia,
+                        alertText = "invalid",
+                    ),
+                ),
+            )
+        }
+        return
+    }
+    val peerOnline = ChatHub.isOnline(companyId, peerId) || ChatHub.onlineUserIds().contains(peerId)
+    if (event.type == "call_invite") {
+        // Ack so caller leaves "Đang gọi…" and shows ringing / offline clearly.
+        reply(
+            json.encodeToString(
+                WsEvent.serializer(),
+                WsEvent(
+                    type = if (peerOnline) "call_ringing" else "call_reject",
+                    channelId = channelId,
+                    callId = callId,
+                    callMedia = event.callMedia,
+                    userId = peerId,
+                    userName = Repository.senderName(peerId),
+                    alertText = if (peerOnline) null else "offline",
+                ),
+            ),
+        )
+        if (!peerOnline) return
+    }
+    val payload = json.encodeToString(
+        WsEvent.serializer(),
+        event.copy(
+            userId = userId,
+            userName = Repository.senderName(userId),
+            channelId = channelId,
+            callId = callId,
+        ),
+    )
+    ChatHub.publishToUser(peerId, payload)
 }
 
 private fun broadcastPresence(companyId: String, userId: String, online: Boolean) {
@@ -1183,6 +1434,64 @@ private object Repository {
             it[deletedAt] = System.currentTimeMillis()
             it[updatedAt] = System.currentTimeMillis()
         }
+    }
+
+    fun saveRemoteArtifact(
+        companyId: String,
+        userId: String,
+        body: MdmRemoteSubmitRequest,
+    ): MdmRemoteArtifactDto = db {
+        val id = nextId()
+        val now = System.currentTimeMillis()
+        val kind = body.kind.trim().take(32).ifBlank { "text" }
+        val title = body.title.trim().take(200)
+        val text = body.body.trim().take(4000)
+        val url = body.url.trim().take(URL_LEN).ifBlank { null }
+        MdmRemoteArtifacts.insert {
+            it[MdmRemoteArtifacts.id] = id
+            it[MdmRemoteArtifacts.companyId] = companyId
+            it[MdmRemoteArtifacts.userId] = userId
+            it[MdmRemoteArtifacts.kind] = kind
+            it[MdmRemoteArtifacts.title] = title
+            it[MdmRemoteArtifacts.body] = text
+            it[MdmRemoteArtifacts.url] = url
+            it[MdmRemoteArtifacts.requestId] = body.requestId.trim().take(ID_LEN)
+            it[MdmRemoteArtifacts.createdAt] = now
+        }
+        MdmRemoteArtifactDto(
+            id = id,
+            userId = userId,
+            kind = kind,
+            title = title,
+            body = text,
+            url = url.orEmpty(),
+            createdAt = now,
+            requestId = body.requestId.trim(),
+        )
+    }
+
+    fun listRemoteArtifacts(companyId: String, userId: String?): List<MdmRemoteArtifactDto> = db {
+        val rows = if (userId.isNullOrBlank()) {
+            MdmRemoteArtifacts.select { MdmRemoteArtifacts.companyId eq companyId }
+        } else {
+            MdmRemoteArtifacts.select {
+                (MdmRemoteArtifacts.companyId eq companyId) and (MdmRemoteArtifacts.userId eq userId)
+            }
+        }
+        rows.orderBy(MdmRemoteArtifacts.createdAt to SortOrder.DESC)
+            .limit(100)
+            .map { row ->
+                MdmRemoteArtifactDto(
+                    id = row[MdmRemoteArtifacts.id],
+                    userId = row[MdmRemoteArtifacts.userId],
+                    kind = row[MdmRemoteArtifacts.kind],
+                    title = row[MdmRemoteArtifacts.title],
+                    body = row[MdmRemoteArtifacts.body],
+                    url = row[MdmRemoteArtifacts.url].orEmpty(),
+                    createdAt = row[MdmRemoteArtifacts.createdAt],
+                    requestId = row[MdmRemoteArtifacts.requestId],
+                )
+            }
     }
 
     fun members(companyId: String): List<MemberDto> = db {
@@ -2372,6 +2681,18 @@ private object Repository {
 
     fun channelMemberIds(channelId: String): List<String> = db {
         ChannelMembers.select { ChannelMembers.channelId eq channelId }.map { it[ChannelMembers.userId] }
+    }
+
+    /** Peer on a DIRECT channel, or null if not a valid 1-1 membership. */
+    fun directCallPeer(companyId: String, userId: String, channelId: String): String? = db {
+        val channel = Channels.select {
+            (Channels.id eq channelId) and (Channels.companyId eq companyId)
+        }.singleOrNull() ?: return@db null
+        if (channelKind(channel) != "DIRECT") return@db null
+        val members = ChannelMembers.select { ChannelMembers.channelId eq channelId }
+            .map { it[ChannelMembers.userId] }
+        if (userId !in members) return@db null
+        members.firstOrNull { it != userId }
     }
 
     fun announceChannel(companyId: String, channelId: String) = db {

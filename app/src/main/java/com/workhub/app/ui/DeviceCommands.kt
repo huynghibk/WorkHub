@@ -23,8 +23,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.workhub.app.R
 import com.workhub.app.data.LocalAppGraph
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.workhub.app.device.DeviceCommandRouter
 
 private const val FIND_CHANNEL = "workhub_find_device"
 const val ACTION_STOP_FIND_ALARM = "com.workhub.app.STOP_FIND_ALARM"
@@ -155,23 +154,10 @@ fun DeviceCommandBinder() {
         }
     }
     LaunchedEffect(Unit) {
+        // Khi MdmGuardService đang chạy, service đã xử lý lệnh — tránh double lock/wipe/alarm.
         graph.realtime.events.collect { event ->
-            when (event.type) {
-                "play_alarm" -> DeviceFindAlarm.start(context)
-                "location_request" -> {
-                    val loc = withContext(Dispatchers.IO) {
-                        awaitBestLocation(context)
-                    }
-                    if (loc != null) {
-                        val url = mapsUrlFrom(loc.latitude, loc.longitude)
-                        runCatching {
-                            withContext(Dispatchers.IO) {
-                                graph.api.reportDeviceLocation(url, event.deviceName.orEmpty())
-                            }
-                        }
-                    }
-                }
-            }
+            if (com.workhub.app.device.MdmGuardService.isRunning()) return@collect
+            DeviceCommandRouter.handle(context, graph, event)
         }
     }
 }

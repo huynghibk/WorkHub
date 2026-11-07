@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ class RealtimeHub(private val api: WorkHubApi) {
     private var loop: Job? = null
     private val running = AtomicBoolean(false)
     private val outbound = AtomicReference<suspend (WsEvent) -> Unit>({})
+    private val pendingOut = Channel<WsEvent>(Channel.UNLIMITED)
 
     private val _events = MutableSharedFlow<WsEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<WsEvent> = _events.asSharedFlow()
@@ -35,7 +37,14 @@ class RealtimeHub(private val api: WorkHubApi) {
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
     fun send(event: WsEvent) {
-        scope.launch { runCatching { outbound.get()(event) } }
+        scope.launch {
+            val sendFn = outbound.get()
+            if (_connected.value && sendFn !== emptySend) {
+                runCatching { sendFn(event) }
+            } else {
+                pendingOut.trySend(event)
+            }
+        }
     }
 
     fun sendTyping(channelId: String) {
@@ -59,19 +68,30 @@ class RealtimeHub(private val api: WorkHubApi) {
             var backoffMs = 500L
             while (isActive && running.get()) {
                 try {
-                    _connected.value = true
                     api.openRealtimeSession(
-                        onConnected = { send -> outbound.set(send) },
+                        onConnected = { send ->
+                            outbound.set(send)
+                            _connected.value = true
+                            // Flush anything queued while the socket was down (e.g. call_invite).
+                            scope.launch {
+                                while (true) {
+                                    val queued = pendingOut.tryReceive().getOrNull() ?: break
+                                    runCatching { send(queued) }
+                                }
+                            }
+                        },
                         onEvent = { event -> _events.emit(event) },
                     )
                     _connected.value = false
+                    outbound.set(emptySend)
                     backoffMs = 500L
                 } catch (error: kotlinx.coroutines.CancellationException) {
                     _connected.value = false
+                    outbound.set(emptySend)
                     throw error
                 } catch (_: Exception) {
                     _connected.value = false
-                    outbound.set({})
+                    outbound.set(emptySend)
                     if (running.get()) {
                         delay(backoffMs)
                         backoffMs = (backoffMs * 2).coerceAtMost(8_000)
@@ -90,7 +110,11 @@ class RealtimeHub(private val api: WorkHubApi) {
         running.set(false)
         loop?.cancel()
         loop = null
-        outbound.set({})
+        outbound.set(emptySend)
         _connected.value = false
+    }
+
+    companion object {
+        private val emptySend: suspend (WsEvent) -> Unit = {}
     }
 }

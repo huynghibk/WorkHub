@@ -195,7 +195,10 @@ class OfflineStore(
             "reaction" -> event.reaction?.let { chat.applyReaction(it) }
             "channel" -> chat.refreshChannels()
             "message_edit", "message_delete" -> event.message?.let { chat.apply(it) }
-            "typing", "read", "presence", "pong" -> Unit
+            "typing", "read", "presence", "pong",
+            "call_invite", "call_ringing", "call_accept", "call_reject", "call_hangup",
+            "call_offer", "call_answer", "call_ice",
+            -> Unit
         }
     }
 

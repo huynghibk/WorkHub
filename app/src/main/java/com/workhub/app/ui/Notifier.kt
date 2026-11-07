@@ -69,7 +69,10 @@ fun NotificationBinder() {
         }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            graph.realtime.stop()
+            // Giữ socket nếu MDM guard đang chạy nền (máy user luôn nhận lệnh).
+            if (!com.workhub.app.device.MdmGuardService.isRunning()) {
+                graph.realtime.stop()
+            }
         }
     }
     LaunchedEffect(Unit) {

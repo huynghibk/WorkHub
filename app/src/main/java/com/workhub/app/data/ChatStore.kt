@@ -155,6 +155,7 @@ class ChatStore(
         replyToId: String? = null,
         replyToName: String? = null,
         replyToBody: String? = null,
+        messageId: String? = null,
     ) {
         val current = session.current()
         val ws = current.workspace?.id ?: throw ApiException("Hãy chọn workspace")
@@ -169,7 +170,7 @@ class ChatStore(
             localPath = localPath,
         )
         val message = MessageDto(
-            id = UUID.randomUUID().toString(),
+            id = messageId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
             channelId = channelId,
             senderId = user.id,
             senderName = user.name,
@@ -194,6 +195,17 @@ class ChatStore(
         )
         bumpReplyCount(parentId)
         requestSync()
+    }
+
+    /** Idempotent call-history row shared by both peers (same [callId] → same message id). */
+    suspend fun sendCallLog(channelId: String, callId: String, body: String) {
+        send(
+            channelId = channelId,
+            body = body,
+            parentId = null,
+            locationUrl = null,
+            messageId = callId,
+        )
     }
 
     suspend fun push() = pushLock.withLock {

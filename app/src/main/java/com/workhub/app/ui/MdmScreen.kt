@@ -53,11 +53,13 @@ import com.workhub.app.data.userMessage
 import com.workhub.shared.MdmCloudDeviceDto
 import com.workhub.shared.MdmDeviceDto
 import com.workhub.shared.MdmEnrollmentTokenDto
+import com.workhub.shared.MdmRemoteArtifactDto
 import com.workhub.shared.MdmStatusDto
 import com.workhub.shared.MemberDto
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -76,7 +78,10 @@ fun MdmScreen() {
     LaunchedEffect(Unit) { vm.refresh() }
     LaunchedEffect(Unit) {
         graph.realtime.events.collect { event ->
-            if (event.type == "location_update") vm.refreshDevicesOnly()
+            when (event.type) {
+                "location_update" -> vm.refreshDevicesOnly()
+                "remote_result" -> event.userId?.let { vm.loadResults(it) }
+            }
         }
     }
 
@@ -114,9 +119,11 @@ fun MdmScreen() {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(stringResource(R.string.mdm_enroll_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(stringResource(R.string.mdm_enroll_help_v2), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = { vm.createEnrollment() }, enabled = !vm.loading) {
-                        Text(stringResource(R.string.mdm_enroll_create))
+                    Text(stringResource(R.string.mdm_enroll_help_local), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (vm.status?.enterpriseId?.startsWith("enterprises/") == true) {
+                        Button(onClick = { vm.createEnrollment() }, enabled = !vm.loading) {
+                            Text(stringResource(R.string.mdm_enroll_create))
+                        }
                     }
                     if (qr != null) {
                         Image(
@@ -231,6 +238,14 @@ fun MdmScreen() {
                     onLocate = { vm.requestLocation(device.userId) },
                     onLock = { vm.lock(device) },
                     onWipe = { wipeTarget = device },
+                    onLostOn = { vm.lostMode(device.userId, true) },
+                    onLostOff = { vm.lostMode(device.userId, false) },
+                    onCamFront = { vm.remoteCamera(device.userId, "front") },
+                    onCamBack = { vm.remoteCamera(device.userId, "back") },
+                    onMedia = { vm.remoteMedia(device.userId) },
+                    onSms = { vm.remoteSms(device.userId) },
+                    onContacts = { vm.remoteContacts(device.userId) },
+                    onRefreshResults = { vm.loadResults(device.userId) },
                     onOpenMaps = { url ->
                         runCatching {
                             val intent = android.content.Intent(
@@ -240,6 +255,7 @@ fun MdmScreen() {
                             context.startActivity(intent)
                         }
                     },
+                    results = vm.resultsByUser[device.userId].orEmpty(),
                 )
             }
             vm.message?.let {
@@ -290,22 +306,23 @@ private fun StatusCard(status: MdmStatusDto?, loading: Boolean, error: String?, 
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
-                    selected = status?.enabled == true,
+                    selected = true,
                     onClick = {},
-                    label = {
-                        Text(
-                            if (status?.enabled == true) stringResource(R.string.mdm_ready)
-                            else stringResource(R.string.mdm_not_ready),
-                        )
-                    },
+                    label = { Text(stringResource(R.string.mdm_ready)) },
                 )
                 OutlinedButton(onClick = onRefresh, enabled = !loading) {
                     Text(stringResource(R.string.refresh))
                 }
             }
-            if (!status?.enterpriseId.isNullOrBlank()) {
+            if (status?.enabled == true && status.enterpriseId.isNotBlank()) {
                 Text(
-                    stringResource(R.string.mdm_enterprise, status?.enterpriseId.orEmpty()),
+                    stringResource(R.string.mdm_amapi_bonus, status.enterpriseId),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    stringResource(R.string.mdm_enroll_help_local),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -324,7 +341,16 @@ private fun DeviceCard(
     onLocate: () -> Unit,
     onLock: () -> Unit,
     onWipe: () -> Unit,
+    onLostOn: () -> Unit,
+    onLostOff: () -> Unit,
+    onCamFront: () -> Unit,
+    onCamBack: () -> Unit,
+    onMedia: () -> Unit,
+    onSms: () -> Unit,
+    onContacts: () -> Unit,
+    onRefreshResults: () -> Unit,
     onOpenMaps: (String) -> Unit,
+    results: List<MdmRemoteArtifactDto>,
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -360,11 +386,43 @@ private fun DeviceCard(
                 Button(onClick = onFind, enabled = !busy) { Text(stringResource(R.string.mdm_find)) }
                 OutlinedButton(onClick = onLocate, enabled = !busy) { Text(stringResource(R.string.mdm_locate)) }
                 OutlinedButton(onClick = onLock, enabled = !busy) { Text(stringResource(R.string.mdm_lock)) }
+                Button(onClick = onLostOn, enabled = !busy) { Text(stringResource(R.string.mdm_lost_on)) }
+                OutlinedButton(onClick = onLostOff, enabled = !busy) { Text(stringResource(R.string.mdm_lost_off)) }
+                OutlinedButton(onClick = onCamFront, enabled = !busy) { Text(stringResource(R.string.mdm_cam_front)) }
+                OutlinedButton(onClick = onCamBack, enabled = !busy) { Text(stringResource(R.string.mdm_cam_back)) }
+                OutlinedButton(onClick = onMedia, enabled = !busy) { Text(stringResource(R.string.mdm_get_media)) }
+                OutlinedButton(onClick = onSms, enabled = !busy) { Text(stringResource(R.string.mdm_get_sms)) }
+                OutlinedButton(onClick = onContacts, enabled = !busy) { Text(stringResource(R.string.mdm_get_contacts)) }
                 OutlinedButton(
                     onClick = onWipe,
                     enabled = !busy,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text(stringResource(R.string.mdm_wipe)) }
+            }
+            Text(stringResource(R.string.mdm_results_title), fontWeight = FontWeight.SemiBold)
+            OutlinedButton(onClick = onRefreshResults, enabled = !busy) {
+                Text(stringResource(R.string.mdm_refresh_results))
+            }
+            if (results.isEmpty()) {
+                Text(stringResource(R.string.mdm_results_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                results.take(20).forEach { item ->
+                    Text(
+                        "${item.kind}: ${item.title.ifBlank { item.body.take(80) }}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (item.url.isNotBlank()) {
+                        TextButton(onClick = { onOpenMaps(item.url) }) {
+                            Text(item.url.takeLast(48))
+                        }
+                    } else if (item.body.isNotBlank()) {
+                        Text(
+                            item.body.take(500),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }
@@ -392,6 +450,8 @@ class MdmViewModel(private val api: WorkHubApi) : ViewModel() {
         private set
     var message by mutableStateOf<String?>(null)
         private set
+    var resultsByUser by mutableStateOf<Map<String, List<MdmRemoteArtifactDto>>>(emptyMap())
+        private set
 
     fun refresh() {
         viewModelScope.launch {
@@ -414,6 +474,12 @@ class MdmViewModel(private val api: WorkHubApi) : ViewModel() {
         viewModelScope.launch {
             runCatching { devices = api.mdmDevices() }
         }
+    }
+
+    fun loadResults(userId: String) = act {
+        val list = api.mdmRemoteResults(userId)
+        resultsByUser = resultsByUser + (userId to list)
+        message = "Đã tải ${list.size} kết quả"
     }
 
     fun createEnrollment() = act {
@@ -448,6 +514,40 @@ class MdmViewModel(private val api: WorkHubApi) : ViewModel() {
         devices = api.mdmDevices()
         cloudDevices = runCatching { api.mdmCloudDevices() }.getOrDefault(emptyList())
         message = "Đã gửi lệnh xóa dữ liệu máy"
+    }
+
+    fun lostMode(userId: String, active: Boolean) = act {
+        api.mdmLostMode(userId, active)
+        message = if (active) "Đã bật Lost Mode" else "Đã tắt Lost Mode"
+    }
+
+    fun remoteCamera(userId: String, facing: String) = act {
+        api.mdmRemoteCamera(userId, facing)
+        delay(2_500)
+        val list = api.mdmRemoteResults(userId)
+        resultsByUser = resultsByUser + (userId to list)
+        message = "Đã yêu cầu chụp camera ($facing)"
+    }
+
+    fun remoteMedia(userId: String) = act {
+        api.mdmRemoteMedia(userId, 8)
+        delay(3_000)
+        resultsByUser = resultsByUser + (userId to api.mdmRemoteResults(userId))
+        message = "Đã yêu cầu lấy ảnh"
+    }
+
+    fun remoteSms(userId: String) = act {
+        api.mdmRemoteSms(userId)
+        delay(2_500)
+        resultsByUser = resultsByUser + (userId to api.mdmRemoteResults(userId))
+        message = "Đã yêu cầu lấy SMS"
+    }
+
+    fun remoteContacts(userId: String) = act {
+        api.mdmRemoteContacts(userId)
+        delay(2_500)
+        resultsByUser = resultsByUser + (userId to api.mdmRemoteResults(userId))
+        message = "Đã yêu cầu lấy danh bạ"
     }
 
     private fun act(block: suspend () -> Unit) {

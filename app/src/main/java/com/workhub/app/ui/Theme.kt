@@ -1,6 +1,7 @@
 package com.workhub.app.ui
 
 import android.app.Activity
+import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -93,6 +94,8 @@ fun WorkHubTheme(content: @Composable () -> Unit) {
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
+            window.statusBarColor = AndroidColor.TRANSPARENT
+            window.navigationBarColor = AndroidColor.TRANSPARENT
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !dark
             WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !dark
         }
