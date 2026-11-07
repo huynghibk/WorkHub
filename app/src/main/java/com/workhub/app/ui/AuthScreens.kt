@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.PhonelinkSetup
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -70,13 +71,24 @@ import kotlinx.coroutines.launch
 fun AuthNav() {
     val nav = rememberNavController()
     NavHost(navController = nav, startDestination = "login") {
-        composable("login") { LoginScreen(onRegister = { nav.navigate("register") }) }
+        composable("login") {
+            LoginScreen(
+                onRegister = { nav.navigate("register") },
+                onEnroll = { nav.navigate("enroll") },
+            )
+        }
         composable("register") { RegisterScreen(onBack = { nav.popBackStack() }) }
+        composable("enroll") {
+            DeviceEnrollScreen(
+                loggedIn = false,
+                onBack = { nav.popBackStack() },
+            )
+        }
     }
 }
 
 @Composable
-private fun LoginScreen(onRegister: () -> Unit) {
+private fun LoginScreen(onRegister: () -> Unit, onEnroll: () -> Unit) {
     val graph = LocalAppGraph.current
     val vm: AuthViewModel = viewModel(factory = authFactory(graph))
     val scope = rememberCoroutineScope()
@@ -126,6 +138,13 @@ private fun LoginScreen(onRegister: () -> Unit) {
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
+        EnrollCornerButton(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .navigationBarsPadding()
+                .padding(16.dp),
+            onClick = onEnroll,
+        )
         ServerCornerButton(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -284,6 +303,26 @@ private fun ServerCornerButton(onClick: () -> Unit, modifier: Modifier = Modifie
                 Icons.Filled.Dns,
                 contentDescription = stringResource(R.string.server_settings),
                 tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EnrollCornerButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
+        modifier = modifier,
+    ) {
+        IconButton(onClick = onClick) {
+            Icon(
+                Icons.Filled.PhonelinkSetup,
+                contentDescription = stringResource(R.string.enroll_title),
+                tint = Color(0xFF0F766E),
             )
         }
     }

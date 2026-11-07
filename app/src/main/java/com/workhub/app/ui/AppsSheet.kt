@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.PhonelinkLock
+import androidx.compose.material.icons.filled.PhonelinkSetup
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -63,6 +64,7 @@ fun AppsSheet(
     onOpenChat: () -> Unit,
     onOpenOrg: () -> Unit,
     onOpenMdm: () -> Unit,
+    onOpenEnroll: () -> Unit,
     onOpenMaps: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenCalendar: () -> Unit,
@@ -108,6 +110,18 @@ fun AppsSheet(
                 ),
             )
         }
+        add(
+            AppShortcut(
+                id = "enroll",
+                label = stringResource(R.string.tab_enroll),
+                icon = Icons.Filled.PhonelinkSetup,
+                tint = Color(0xFF0D9488),
+                onClick = {
+                    onOpenEnroll()
+                    onDismiss()
+                },
+            ),
+        )
         if (showMdm) {
             add(
                 AppShortcut(

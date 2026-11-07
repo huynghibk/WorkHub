@@ -49,8 +49,10 @@ import com.workhub.shared.MdmCloudDeviceDto
 import com.workhub.shared.MdmCommandRequest
 import com.workhub.shared.MdmCommandResult
 import com.workhub.shared.MdmDeviceDto
+import com.workhub.shared.MdmEnrollByInviteRequest
 import com.workhub.shared.MdmEnrollmentTokenDto
 import com.workhub.shared.MdmLocationReport
+import com.workhub.shared.MdmSelfBindRequest
 import com.workhub.shared.MdmStatusDto
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -280,13 +282,34 @@ class WorkHubApi(private val session: SessionStore) {
     suspend fun mdmEnrollmentToken(): MdmEnrollmentTokenDto =
         send(HttpMethod.Post, "/admin/mdm/enrollment-token")
 
+    /** Thành viên tự lấy mã đăng ký máy (đã đăng nhập). */
+    suspend fun myMdmEnrollmentToken(): MdmEnrollmentTokenDto =
+        send(HttpMethod.Post, "/me/mdm/enroll-token")
+
+    /** Màn login: lấy mã bằng invite code, không cần JWT. */
+    suspend fun enrollTokenByInvite(inviteCode: String): MdmEnrollmentTokenDto =
+        send(
+            HttpMethod.Post,
+            "/mdm/enroll-token",
+            MdmEnrollByInviteRequest(inviteCode),
+            auth = false,
+        )
+
     suspend fun mdmDevices(): List<MdmDeviceDto> = send(HttpMethod.Get, "/admin/mdm/devices")
+
+    suspend fun myMdmDevices(): List<MdmDeviceDto> = send(HttpMethod.Get, "/me/mdm/my-devices")
 
     suspend fun mdmCloudDevices(): List<MdmCloudDeviceDto> =
         send(HttpMethod.Get, "/admin/mdm/cloud-devices")
 
+    suspend fun myMdmCloudDevices(): List<MdmCloudDeviceDto> =
+        send(HttpMethod.Get, "/me/mdm/cloud-devices")
+
     suspend fun mdmBind(userId: String, deviceName: String, displayName: String = ""): MdmDeviceDto =
         send(HttpMethod.Post, "/admin/mdm/bind", MdmBindRequest(userId, deviceName, displayName))
+
+    suspend fun mdmSelfBind(deviceName: String, displayName: String = ""): MdmDeviceDto =
+        send(HttpMethod.Post, "/me/mdm/self-bind", MdmSelfBindRequest(deviceName, displayName))
 
     suspend fun mdmLock(userId: String? = null, deviceName: String? = null): MdmCommandResult =
         send(HttpMethod.Post, "/admin/mdm/lock", MdmCommandRequest(userId, deviceName))

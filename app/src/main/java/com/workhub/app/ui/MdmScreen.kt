@@ -114,7 +114,7 @@ fun MdmScreen() {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(stringResource(R.string.mdm_enroll_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(stringResource(R.string.mdm_enroll_help), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.mdm_enroll_help_v2), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = { vm.createEnrollment() }, enabled = !vm.loading) {
                         Text(stringResource(R.string.mdm_enroll_create))
                     }

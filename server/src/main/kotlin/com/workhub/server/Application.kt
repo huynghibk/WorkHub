@@ -47,9 +47,11 @@ import com.workhub.shared.MdmBindRequest
 import com.workhub.shared.MdmCommandRequest
 import com.workhub.shared.MdmCommandResult
 import com.workhub.shared.MdmDeviceDto
+import com.workhub.shared.MdmEnrollByInviteRequest
 import com.workhub.shared.MdmEnrollmentTokenDto
 import com.workhub.shared.MdmCloudDeviceDto
 import com.workhub.shared.MdmLocationReport
+import com.workhub.shared.MdmSelfBindRequest
 import com.workhub.shared.MdmStatusDto
 import org.jetbrains.exposed.sql.ResultRow
 import io.ktor.http.ContentType
@@ -192,6 +194,23 @@ fun Application.module() {
         post("/auth/login") {
             call.respond(Repository.login(call.receive()))
         }
+        // Đăng ký máy công ty bằng mã mời (màn login, chưa cần JWT).
+        post("/mdm/enroll-token") {
+            val invite = call.receive<MdmEnrollByInviteRequest>().inviteCode.trim().uppercase()
+            if (invite.isEmpty()) throw AppException(HttpStatusCode.BadRequest, "Thiếu mã mời")
+            Repository.requireInviteCode(invite)
+            val token = Amapi.createEnrollmentToken()
+            call.respond(
+                HttpStatusCode.Created,
+                MdmEnrollmentTokenDto(
+                    name = token.name,
+                    value = token.value,
+                    qrCode = token.qrCode,
+                    expirationTimestamp = token.expirationTimestamp,
+                    policyName = token.policyName,
+                ),
+            )
+        }
         authenticate("auth-jwt") {
             get("/workspaces") { call.respond(Repository.myWorkspaces(call.userId())) }
             post("/workspaces") {
@@ -311,6 +330,48 @@ fun Application.module() {
                     )
                     ChatHub.publish(call.companyId(), payload)
                     call.respond(MdmCommandResult(ok = true, detail = "Đã cập nhật vị trí"))
+                }
+                post("/mdm/enroll-token") {
+                    val token = Amapi.createEnrollmentToken()
+                    call.respond(
+                        HttpStatusCode.Created,
+                        MdmEnrollmentTokenDto(
+                            name = token.name,
+                            value = token.value,
+                            qrCode = token.qrCode,
+                            expirationTimestamp = token.expirationTimestamp,
+                            policyName = token.policyName,
+                        ),
+                    )
+                }
+                get("/mdm/my-devices") {
+                    call.respond(Repository.listManagedDevicesForUser(call.companyId(), call.userId()))
+                }
+                get("/mdm/cloud-devices") {
+                    call.respond(
+                        Amapi.listDevices().map {
+                            MdmCloudDeviceDto(
+                                name = it.name,
+                                state = it.state,
+                                appliedPolicyName = it.appliedPolicyName,
+                                enrollmentTime = it.enrollmentTime,
+                            )
+                        },
+                    )
+                }
+                post("/mdm/self-bind") {
+                    val body = call.receive<MdmSelfBindRequest>()
+                    call.respond(
+                        HttpStatusCode.Created,
+                        Repository.bindManagedDevice(
+                            call.companyId(),
+                            MdmBindRequest(
+                                userId = call.userId(),
+                                deviceName = body.deviceName,
+                                displayName = body.displayName,
+                            ),
+                        ),
+                    )
                 }
             }
             // Endpoint rõ ràng — client ưu tiên path này.
@@ -1000,6 +1061,13 @@ private object Repository {
         }
     }
 
+    fun requireInviteCode(code: String) = db {
+        val found = Companies.select {
+            (Companies.inviteCode eq code) and usable(Companies.isActive, Companies.deletedAt)
+        }.any()
+        if (!found) throw AppException(HttpStatusCode.NotFound, "Mã mời không hợp lệ")
+    }
+
     fun listManagedDevices(companyId: String): List<MdmDeviceDto> = db {
         val names = memberNames(companyId)
         ManagedDevices.select {
@@ -1018,6 +1086,9 @@ private object Repository {
             )
         }
     }
+
+    fun listManagedDevicesForUser(companyId: String, userId: String): List<MdmDeviceDto> =
+        listManagedDevices(companyId).filter { it.userId == userId }
 
     fun reportDeviceLocation(companyId: String, userId: String, report: MdmLocationReport) = db {
         val url = cleanLocationUrl(report.locationUrl)

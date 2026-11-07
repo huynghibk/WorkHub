@@ -463,7 +463,7 @@ private fun MainNav() {
                 SoftTabBar(
                     tabs = tabs,
                     selectedRoute = route,
-                    appsHighlighted = appsOpen || route == "notes" || route == "org" || route == "mdm",
+                    appsHighlighted = appsOpen || route == "notes" || route == "org" || route == "mdm" || route == "enroll",
                     onSelect = { tab ->
                         appsOpen = false
                         go(tab.route)
@@ -506,6 +506,7 @@ private fun MainNav() {
             }
             composable("org") { AdminOrgScreen() }
             composable("mdm") { MdmScreen() }
+            composable("enroll") { DeviceEnrollScreen(loggedIn = true) }
             composable("maps") {
                 MapsInAppScreen(
                     onBack = { nav.popBackStack() },
@@ -562,6 +563,7 @@ private fun MainNav() {
             onOpenChat = { go("chat") },
             onOpenOrg = { go("org") },
             onOpenMdm = { go("mdm") },
+            onOpenEnroll = { go("enroll") },
             onOpenMaps = {
                 appsOpen = false
                 openTool("maps")

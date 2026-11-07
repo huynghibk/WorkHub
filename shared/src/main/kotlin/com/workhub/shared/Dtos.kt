@@ -399,6 +399,18 @@ data class MdmEnrollmentTokenDto(
     val policyName: String = "",
 )
 
+/** Lấy mã đăng ký máy bằng invite code (màn login, chưa đăng nhập). */
+@Serializable
+data class MdmEnrollByInviteRequest(
+    val inviteCode: String,
+)
+
+@Serializable
+data class MdmSelfBindRequest(
+    val deviceName: String,
+    val displayName: String = "",
+)
+
 @Serializable
 data class MdmDeviceDto(
     val id: String,

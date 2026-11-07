@@ -61,11 +61,15 @@ internal object Amapi {
         }
     }
 
-    fun createEnrollmentToken(): EnrollmentTokenResponse {
+    fun createEnrollmentToken(allowPersonalUsage: Boolean = true): EnrollmentTokenResponse {
         ensureReady()
         val body = buildJsonObject {
             put("policyName", policyName())
             put("duration", "86400s")
+            // Cho phép tạo work profile trên máy đang dùng (không bắt buộc factory reset).
+            if (allowPersonalUsage) {
+                put("allowPersonalUsage", "PERSONAL_USAGE_ALLOWED")
+            }
         }
         return post("$API/${enterpriseId()}/enrollmentTokens", body.toString())
             .let { json.decodeFromString(EnrollmentTokenResponse.serializer(), it) }
