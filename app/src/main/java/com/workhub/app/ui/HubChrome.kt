@@ -47,7 +47,7 @@ internal val TouchTarget = 48.dp
 
 @Composable
 internal fun StatusBadge(status: String) {
-    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    val dark = isAppDarkTheme()
     val (bg, fg) = when (normalizeStatus(status)) {
         "IN_PROGRESS" -> Royal to Color.White
         "DONE" -> DoneGreen to Color.White
@@ -96,7 +96,7 @@ internal fun PriorityChip(priority: String) {
 @Composable
 internal fun InitialsAvatar(name: String, size: Dp = 24.dp) {
     val hue = remember(name) { ((name.hashCode().toLong() and 0x7fff_ffff) % 12) * 30f }
-    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    val dark = isAppDarkTheme()
     val bg = Color.hsl(hue, 0.32f, if (dark) 0.28f else 0.86f)
     val fg = Color.hsl(hue, 0.40f, if (dark) 0.88f else 0.28f)
     Box(

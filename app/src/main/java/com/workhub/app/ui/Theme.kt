@@ -9,10 +9,15 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import com.workhub.app.data.LocalAppGraph
+import com.workhub.app.data.UserSettings
 
 internal val Royal = Color(0xFF1D4ED8)
 internal val TaskWashLight = Color(0xFFEFF6FF)
@@ -78,7 +83,12 @@ private val DarkColors = darkColorScheme(
 
 @Composable
 fun WorkHubTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+    val settings by LocalAppGraph.current.userPrefs.state.collectAsState(initial = UserSettings())
+    val dark = when (settings.themeMode) {
+        "LIGHT" -> false
+        "DARK" -> true
+        else -> isSystemInDarkTheme()
+    }
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -101,13 +111,14 @@ fun WorkHubTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-internal fun taskWash(): Color =
-    if (isSystemInDarkTheme()) MaterialTheme.colorScheme.primaryContainer else TaskWashLight
+internal fun isAppDarkTheme(): Boolean =
+    MaterialTheme.colorScheme.background.luminance() < 0.5f
 
 @Composable
-internal fun noteWash(): Color =
-    if (isSystemInDarkTheme()) MaterialTheme.colorScheme.secondaryContainer else NoteWashLight
+internal fun taskWash(): Color = MaterialTheme.colorScheme.primaryContainer
 
 @Composable
-internal fun taskRail(): Color =
-    if (isSystemInDarkTheme()) MaterialTheme.colorScheme.primary else Royal
+internal fun noteWash(): Color = MaterialTheme.colorScheme.secondaryContainer
+
+@Composable
+internal fun taskRail(): Color = MaterialTheme.colorScheme.primary
